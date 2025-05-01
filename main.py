@@ -1,3 +1,4 @@
+import sys
 import pandas as pd
 import os
 import json
@@ -39,18 +40,29 @@ def actualizar_expse_montos():
         json.dump(expse_montos, file, indent=4)
 
 def obtener_nombre_archivo_unico(base_path):
-    locale.setlocale(locale.LC_TIME, "es_ES.utf8") 
-    mes_actual = datetime.now().strftime("%B").capitalize() 
-    año_actual = datetime.now().year
-    nombre_base = f"Liquidación {mes_actual} {año_actual}.xlsx"
+    locale.setlocale(locale.LC_TIME, "es_ES.utf8")
+
+    hoy = datetime.now()
+
+    if hoy.month == 1:
+        mes_anterior = 12
+        año = hoy.year - 1
+    else:
+        mes_anterior = hoy.month - 1
+        año = hoy.year
+
+    fecha_mes_anterior = datetime(año, mes_anterior, 1)
+    nombre_mes = fecha_mes_anterior.strftime("%B").capitalize()
+
+    nombre_base = f"Liquidación {nombre_mes} {año}.xlsx"
     ruta_archivo = base_path / nombre_base
     contador = 1
-    
+
     while ruta_archivo.exists():
-        nombre_modificado = f"Liquidación {mes_actual} {año_actual} ({contador}).xlsx"
+        nombre_modificado = f"Liquidación {nombre_mes} {año} ({contador}).xlsx"
         ruta_archivo = base_path / nombre_modificado
         contador += 1
-    
+
     return ruta_archivo
 
 
@@ -107,6 +119,15 @@ def abrir_ubicacion():
 root = tk.Tk()
 root.title("Cargar y Modificar Excel")
 root.geometry("500x400")
+
+if getattr(sys, 'frozen', False):
+    base_path = sys._MEIPASS
+else:
+    base_path = os.path.abspath(".")
+
+icon_path = os.path.join(base_path, "icon.ico")
+root.iconbitmap(icon_path)
+
 
 root.update_idletasks()
 ancho = root.winfo_width()
