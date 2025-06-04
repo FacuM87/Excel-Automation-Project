@@ -40,8 +40,6 @@ def actualizar_expse_montos():
         json.dump(expse_montos, file, indent=4)
 
 def obtener_nombre_archivo_unico(base_path):
-    locale.setlocale(locale.LC_TIME, "es_ES.utf8")
-
     hoy = datetime.now()
 
     if hoy.month == 1:
@@ -52,7 +50,14 @@ def obtener_nombre_archivo_unico(base_path):
         año = hoy.year
 
     fecha_mes_anterior = datetime(año, mes_anterior, 1)
-    nombre_mes = fecha_mes_anterior.strftime("%B").capitalize()
+
+    meses = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }
+
+    nombre_mes = meses[fecha_mes_anterior.month]
 
     nombre_base = f"Liquidación {nombre_mes} {año}.xlsx"
     ruta_archivo = base_path / nombre_base
@@ -125,8 +130,13 @@ if getattr(sys, 'frozen', False):
 else:
     base_path = os.path.abspath(".")
 
-icon_path = os.path.join(base_path, "icon.ico")
-root.iconbitmap(icon_path)
+try:
+    icon_path = os.path.join(base_path, "icon.ico")
+    if os.path.exists(icon_path):
+        root.iconbitmap(icon_path)
+except Exception as e:
+    print(f"No se pudo cargar el ícono: {e}")
+
 
 
 root.update_idletasks()
