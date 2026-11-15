@@ -13,3 +13,4 @@ docs/**/*.XLS
 docs/**/*.XLSX
 Liquidaci*.xlsx
 liquidaciones.db
+ajustes.json

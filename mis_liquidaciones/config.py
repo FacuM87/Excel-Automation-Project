@@ -64,3 +64,37 @@ def cargar_montos(archivo=ARCHIVO_MONTOS, anteriores=ARCHIVOS_MONTOS_ANTERIORES)
 def guardar_montos(montos, archivo=ARCHIVO_MONTOS):
     with open(archivo, "w", encoding="utf-8") as file:
         json.dump(montos, file, indent=4, ensure_ascii=False)
+
+
+ARCHIVO_AJUSTES = obtener_directorio_app() / "ajustes.json"
+TEMAS = {"claro": "flatly", "oscuro": "darkly"}
+AJUSTES_POR_DEFECTO = {"tema": "claro", "carpeta_guardado": ""}
+
+
+def cargar_ajustes(archivo=ARCHIVO_AJUSTES):
+    """Lee ajustes.json; completa con los valores por defecto lo que falte o sea inválido."""
+    ajustes = dict(AJUSTES_POR_DEFECTO)
+    try:
+        with open(archivo, "r", encoding="utf-8") as file:
+            datos = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return ajustes
+    if isinstance(datos, dict):
+        if datos.get("tema") in TEMAS:
+            ajustes["tema"] = datos["tema"]
+        if isinstance(datos.get("carpeta_guardado"), str):
+            ajustes["carpeta_guardado"] = datos["carpeta_guardado"]
+    return ajustes
+
+
+def guardar_ajustes(ajustes, archivo=ARCHIVO_AJUSTES):
+    with open(archivo, "w", encoding="utf-8") as file:
+        json.dump(ajustes, file, indent=4, ensure_ascii=False)
+
+
+def carpeta_guardado(ajustes):
+    """La carpeta elegida si todavía existe; si no, la de siempre (Escritorio)."""
+    elegida = ajustes.get("carpeta_guardado")
+    if elegida and Path(elegida).is_dir():
+        return Path(elegida)
+    return obtener_ruta_guardado()

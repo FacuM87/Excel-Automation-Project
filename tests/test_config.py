@@ -1,6 +1,9 @@
 import json
 
-from mis_liquidaciones.config import PRESTACIONES_POR_DEFECTO, cargar_montos, guardar_montos
+from mis_liquidaciones.config import (
+    AJUSTES_POR_DEFECTO, PRESTACIONES_POR_DEFECTO, cargar_ajustes, cargar_montos, carpeta_guardado, guardar_ajustes,
+    guardar_montos, obtener_ruta_guardado,
+)
 
 
 def escribir_json(ruta, datos):
@@ -48,3 +51,29 @@ def test_guardar_y_volver_a_cargar(tmp_path):
     montos = {"EXPSE 1": "100", "CUES DES": "", "ATEPSIQ": "1000,5"}
     guardar_montos(montos, archivo)
     assert cargar_montos(archivo, ()) == montos
+
+
+def test_ajustes_sin_archivo_usa_los_valores_por_defecto(tmp_path):
+    assert cargar_ajustes(tmp_path / "ajustes.json") == AJUSTES_POR_DEFECTO
+
+
+def test_guardar_y_cargar_ajustes(tmp_path):
+    archivo = tmp_path / "ajustes.json"
+    guardar_ajustes({"tema": "oscuro", "carpeta_guardado": str(tmp_path)}, archivo)
+    assert cargar_ajustes(archivo) == {"tema": "oscuro", "carpeta_guardado": str(tmp_path)}
+
+
+def test_ajustes_danados_o_invalidos(tmp_path):
+    archivo = tmp_path / "ajustes.json"
+    archivo.write_text("{roto", encoding="utf-8")
+    assert cargar_ajustes(archivo) == AJUSTES_POR_DEFECTO
+    escribir_json(archivo, {"tema": "violeta", "carpeta_guardado": 5})
+    assert cargar_ajustes(archivo) == AJUSTES_POR_DEFECTO
+    escribir_json(archivo, ["no", "es", "un", "objeto"])
+    assert cargar_ajustes(archivo) == AJUSTES_POR_DEFECTO
+
+
+def test_carpeta_guardado(tmp_path):
+    assert carpeta_guardado({"carpeta_guardado": str(tmp_path)}) == tmp_path
+    assert carpeta_guardado({"carpeta_guardado": str(tmp_path / "no-existe")}) == obtener_ruta_guardado()
+    assert carpeta_guardado({"carpeta_guardado": ""}) == obtener_ruta_guardado()

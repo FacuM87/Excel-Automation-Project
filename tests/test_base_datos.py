@@ -110,3 +110,22 @@ def test_psicomey_incluido_se_guarda(con, crear_planilla):
     base_datos.guardar(con, 3, 2026, liquidar(ruta, MONTOS, incluir_opcional=True), incluye_opcional=True)
     ordenes = base_datos.leer_ordenes(con, base_datos.buscar_liquidacion(con, 3, 2026).id)
     assert list(ordenes["prestacion"]) == ["EXPSE 1", "PSICOMEY"]
+
+
+def test_resumen_por_prestacion(con, crear_planilla):
+    base_datos.guardar(con, 3, 2026, _liquidar(crear_planilla, [1, 2, 3]))
+    registrada = base_datos.buscar_liquidacion(con, 3, 2026)
+    assert base_datos.resumen_por_prestacion(con, registrada.id) == [("EXPSE 1", 2, 200.0), ("EXPSE 2", 1, 200.0)]
+    assert base_datos.resumen_por_prestacion(con, 999) == []
+
+
+def test_borrar_quita_la_liquidacion_y_sus_ordenes(con, crear_planilla):
+    base_datos.guardar(con, 2, 2026, _liquidar(crear_planilla, [1, 2], fecha="01/02/2026", nombre="feb.xlsx"))
+    base_datos.guardar(con, 3, 2026, _liquidar(crear_planilla, [3, 4, 5], nombre="mar.xlsx"))
+    marzo = base_datos.buscar_liquidacion(con, 3, 2026)
+
+    assert base_datos.borrar(con, marzo.id)
+    assert base_datos.buscar_liquidacion(con, 3, 2026) is None
+    assert [r.nombre for r in base_datos.listar_liquidaciones(con)] == ["Febrero 2026"]
+    assert con.execute("SELECT COUNT(*) FROM ordenes").fetchone()[0] == 2
+    assert not base_datos.borrar(con, marzo.id)

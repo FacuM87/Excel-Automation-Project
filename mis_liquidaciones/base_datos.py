@@ -147,3 +147,16 @@ def leer_ordenes(con, liquidacion_id):
     return pd.read_sql_query(
         "SELECT orden, fecha, profesional, hc, trabajador, prestacion, monto FROM ordenes "
         "WHERE liquidacion_id = ? ORDER BY id", con, params=(liquidacion_id,))
+
+
+def resumen_por_prestacion(con, liquidacion_id):
+    """Lista de (prestación, cantidad, total) de una liquidación, ordenada por prestación."""
+    return con.execute(
+        "SELECT prestacion, COUNT(*), SUM(monto) FROM ordenes WHERE liquidacion_id = ? "
+        "GROUP BY prestacion ORDER BY prestacion", (liquidacion_id,)).fetchall()
+
+
+def borrar(con, liquidacion_id):
+    """Borra la liquidación y sus órdenes. Devuelve True si existía."""
+    with con:
+        return con.execute("DELETE FROM liquidaciones WHERE id = ?", (liquidacion_id,)).rowcount > 0
