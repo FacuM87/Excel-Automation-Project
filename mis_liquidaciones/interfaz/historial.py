@@ -158,7 +158,7 @@ class PestanaHistorial:
         self.actualizar()
 
     def importar_historial(self, rutas=None):
-        """Carga en la base los archivos ya recibidos, sin generar Excel."""
+        """Carga en la base los archivos ya recibidos y, si se pide, genera sus Excel de liquidación."""
         if rutas is None:
             rutas = filedialog.askopenfilenames(
                 title="Elegí las planillas a importar", filetypes=[("Excel Files", "*.xlsx;*.xls")])
@@ -187,12 +187,13 @@ class PestanaHistorial:
             return
 
         self.dialogo_importacion = DialogoImportacion(
-            self.app.root, analisis, self._confirmar_importacion)
+            self.app.root, analisis, self._confirmar_importacion, self.app.carpeta_guardado)
 
-    def _confirmar_importacion(self, analisis, reemplazar):
+    def _confirmar_importacion(self, analisis, reemplazar, generar=()):
+        carpeta = self.app.carpeta_guardado
         try:
             with self._abrir_base() as con:
-                resultado = importacion.importar(con, analisis.periodos, reemplazar)
+                resultado = importacion.importar(con, analisis.periodos, reemplazar, carpeta, generar)
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo importar el historial.\n{e}")
             return False
@@ -204,5 +205,18 @@ class PestanaHistorial:
             lineas.append("Reemplazados: " + ", ".join(resultado.reemplazados) + ".")
         if resultado.salteados:
             lineas.append("Salteados porque ya estaban registrados: " + ", ".join(resultado.salteados) + ".")
-        messagebox.showinfo("Historial importado", "\n".join(lineas))
+        if resultado.excel_generados:
+            lineas.append(f"\nSe generaron {len(resultado.excel_generados)} Excel de liquidación en {carpeta}:")
+            lineas.extend(f"  • {ruta.name}" for ruta in resultado.excel_generados)
+        if resultado.errores_excel:
+            lineas.append("\nNo se pudieron guardar estos Excel:")
+            lineas.extend(f"  • {nombre}: {error}" for nombre, error in resultado.errores_excel)
+        mensaje = "\n".join(lineas)
+        if resultado.excel_generados:
+            if messagebox.askyesno("Historial importado", mensaje + "\n\n¿Abrir la carpeta?"):
+                os.startfile(carpeta)
+        elif resultado.errores_excel:
+            messagebox.showwarning("Historial importado", mensaje)
+        else:
+            messagebox.showinfo("Historial importado", mensaje)
         return True

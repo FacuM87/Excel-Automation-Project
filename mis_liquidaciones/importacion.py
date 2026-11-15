@@ -5,7 +5,8 @@ import pandas as pd
 
 from . import base_datos
 from .procesamiento import (
-    COLUMNA_ORDEN, MESES, Liquidacion, aplicar_montos, convertir_fechas, leer_planilla_origen, ordenes_repetidas,
+    COLUMNA_ORDEN, MESES, Liquidacion, aplicar_montos, convertir_fechas, guardar_liquidacion, leer_planilla_origen,
+    ordenes_repetidas,
 )
 
 
@@ -17,12 +18,18 @@ class PeriodoImportable:
     archivos: list
     liquidacion: Liquidacion
     duplicadas_descartadas: int = 0
+    archivos_con_ordenes: list = None
     registrado: base_datos.LiquidacionRegistrada = None
     en_otros_periodos: dict = field(default_factory=dict)
 
     @property
     def nombre(self):
         return f"{MESES[self.mes - 1]} {self.año}"
+
+    @property
+    def origen(self):
+        """Los archivos que aportaron alguna orden; los que solo traían órdenes repetidas no se nombran."""
+        return ", ".join(self.archivos_con_ordenes or self.archivos)
 
     @property
     def repetidas_en_archivo(self):
@@ -42,14 +49,18 @@ class ResultadoImportacion:
     registrados: list = field(default_factory=list)
     reemplazados: list = field(default_factory=list)
     salteados: list = field(default_factory=list)
+    excel_generados: list = field(default_factory=list)
+    errores_excel: list = field(default_factory=list)
 
 
 def _unir_sin_duplicar(partes):
-    """Une las tablas de un mes. Las órdenes cuyo número ya apareció en un archivo anterior se descartan."""
+    """Une las tablas de un mes. Las órdenes cuyo número ya apareció en otro archivo se descartan.
+    Los archivos con más órdenes van primero, así un archivo parcial no se nombra como origen."""
     vistas = set()
     tablas = []
+    aportantes = []
     descartadas = 0
-    for df in partes:
+    for nombre, df in sorted(partes, key=lambda parte: -len(parte[1])):
         if COLUMNA_ORDEN in df.columns:
             numeros = df[COLUMNA_ORDEN]
             repetida = numeros.notna() & numeros.isin(vistas)
@@ -57,11 +68,13 @@ def _unir_sin_duplicar(partes):
             vistas.update(numeros.dropna())
             df = df[~repetida]
         tablas.append(df)
+        if len(df):
+            aportantes.append(nombre)
     unida = pd.concat(tablas, ignore_index=True)
     if COLUMNA_ORDEN in unida.columns:
         unida[COLUMNA_ORDEN] = unida[COLUMNA_ORDEN].astype(object).where(unida[COLUMNA_ORDEN].notna(), None)
     orden = convertir_fechas(unida["Fecha"]).argsort(kind="stable")
-    return unida.iloc[orden].reset_index(drop=True), descartadas
+    return unida.iloc[orden].reset_index(drop=True), descartadas, sorted(aportantes)
 
 
 def analizar_archivos(rutas, montos):
@@ -89,9 +102,9 @@ def analizar_archivos(rutas, montos):
     periodos = []
     for (mes, año) in sorted(partes, key=lambda p: (p[1], p[0])):
         archivos = [nombre for nombre, _ in partes[(mes, año)]]
-        tabla, descartadas = _unir_sin_duplicar([df for _, df in partes[(mes, año)]])
+        tabla, descartadas, aportantes = _unir_sin_duplicar(partes[(mes, año)])
         liquidacion = aplicar_montos(tabla, montos)
-        periodos.append(PeriodoImportable(mes, año, archivos, liquidacion, descartadas))
+        periodos.append(PeriodoImportable(mes, año, archivos, liquidacion, descartadas, aportantes))
     return AnalisisImportacion(periodos, errores, sin_fecha, no_cumplidas)
 
 
@@ -105,14 +118,22 @@ def verificar_en_base(con, periodos):
                 con, periodo.liquidacion.tabla[COLUMNA_ORDEN], (periodo.mes, periodo.año))
 
 
-def importar(con, periodos, reemplazar=False):
-    """Registra los períodos en la base, sin generar Excel. Los ya registrados se reemplazan o se saltean."""
+def importar(con, periodos, reemplazar=False, carpeta=None, generar=()):
+    """Registra los períodos en la base. Los ya registrados se reemplazan o se saltean.
+    A los períodos (mes, año) de generar se les crea el Excel de liquidación en carpeta."""
     resultado = ResultadoImportacion()
     for periodo in periodos:
+        ruta = None
+        if (periodo.mes, periodo.año) in set(generar):
+            try:
+                ruta = guardar_liquidacion(periodo.liquidacion, carpeta, periodo.mes, periodo.año)
+                resultado.excel_generados.append(ruta)
+            except Exception as e:
+                resultado.errores_excel.append((periodo.nombre, str(e)))
         if base_datos.buscar_liquidacion(con, periodo.mes, periodo.año) and not reemplazar:
             resultado.salteados.append(periodo.nombre)
             continue
         reemplazado = base_datos.guardar(
-            con, periodo.mes, periodo.año, periodo.liquidacion, ", ".join(periodo.archivos))
+            con, periodo.mes, periodo.año, periodo.liquidacion, periodo.origen, ruta)
         (resultado.reemplazados if reemplazado else resultado.registrados).append(periodo.nombre)
     return resultado

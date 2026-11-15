@@ -31,7 +31,7 @@ class PestanaReportes:
 
         barra = tb.Frame(self.marco)
         barra.pack(fill="x", pady=(0, 10))
-        self.var_tipo = tk.StringVar(value="mensual")
+        self.var_tipo = tk.StringVar(value="anual")
         for valor, texto in (("mensual", "Mensual"), ("anual", "Anual")):
             tb.Radiobutton(barra, text=texto, value=valor, variable=self.var_tipo, bootstyle="info-outline-toolbutton",
                            cursor="hand2", width=9, command=self.actualizar).pack(side=tk.LEFT)

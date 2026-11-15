@@ -1,6 +1,7 @@
+import pandas as pd
 import pytest
 
-from mis_liquidaciones import base_datos
+from mis_liquidaciones import base_datos, importacion
 from mis_liquidaciones.importacion import analizar_archivos, importar, verificar_en_base
 
 from .conftest import ENCABEZADOS, fila
@@ -46,7 +47,14 @@ def test_mismo_mes_en_dos_archivos_se_une_sin_duplicar(crear_planilla, base):
 
     importar(base, analisis.periodos)
     assert _ordenes(base) == [1, 2, 3]
-    assert base_datos.buscar_liquidacion(base, 3, 2026).archivo_origen == "a.xlsx, b.xlsx"
+    assert base_datos.buscar_liquidacion(base, 3, 2026).archivo_origen == "b.xlsx"
+
+
+def test_origen_nombra_los_archivos_que_aportan_ordenes(crear_planilla, base):
+    a = crear_planilla([fila(1, "EXPSE 1"), fila(2, "EXPSE 1")], nombre="a.xlsx")
+    b = crear_planilla([fila(2, "EXPSE 1"), fila(3, "EXPSE 2"), fila(4, "EXPSE 2")], nombre="b.xlsx")
+    [periodo] = analizar_archivos([a, b], MONTOS).periodos
+    assert (periodo.archivos, periodo.origen, periodo.duplicadas_descartadas) == (["a.xlsx", "b.xlsx"], "a.xlsx, b.xlsx", 1)
 
 
 def test_archivo_con_dos_meses(crear_planilla, base):
@@ -144,3 +152,70 @@ def test_no_genera_excel(crear_planilla, tmp_path, base):
     antes = set(tmp_path.iterdir())
     importar(base, analizar_archivos([ruta], MONTOS).periodos)
     assert set(tmp_path.iterdir()) == antes
+
+
+def _tres_meses(crear_planilla):
+    expse = [1, "05/03/2026 10:15:30", "Profesional", 500, "Trabajador", 900, "Examen", "EXPSE 1", "Sí"]
+    psicomey = [2, "05/03/2026 10:15:30", "Profesional", 500, "Trabajador", 900, "Examen", "PSICOMEY", "Sí"]
+    ruta = crear_planilla([expse, psicomey, fila(3, "EXPSE 2", fecha="10/03/2026"),
+                           fila(4, "EXPSE 1", fecha="01/04/2026"), fila(5, "EXPSE 2", fecha="01/05/2026")])
+    return analizar_archivos([ruta], MONTOS).periodos
+
+
+def test_genera_excel_de_los_meses_elegidos(crear_planilla, tmp_path, base):
+    salida = tmp_path / "salida"
+    salida.mkdir()
+    periodos = _tres_meses(crear_planilla)
+    resultado = importar(base, periodos, carpeta=salida, generar={(3, 2026), (5, 2026)})
+    assert [r.name for r in resultado.excel_generados] == ["Liquidación Marzo 2026.xlsx", "Liquidación Mayo 2026.xlsx"]
+    assert sorted(p.name for p in salida.iterdir()) == ["Liquidación Marzo 2026.xlsx", "Liquidación Mayo 2026.xlsx"]
+
+    df = pd.read_excel(salida / "Liquidación Marzo 2026.xlsx")
+    assert list(df["Prestación"].fillna("")) == ["EXPSE 1", "EXPSE 2", ""]
+    assert list(df["Fecha"])[-1] == "TOTAL"
+    assert df["Monto"].iloc[-1] == 300
+
+    assert base_datos.buscar_liquidacion(base, 3, 2026).archivo_generado == str(salida / "Liquidación Marzo 2026.xlsx")
+    assert base_datos.buscar_liquidacion(base, 4, 2026).archivo_generado is None
+
+
+def test_genera_todos_y_no_pisa_existentes(crear_planilla, tmp_path, base):
+    salida = tmp_path / "salida"
+    salida.mkdir()
+    (salida / "Liquidación Marzo 2026.xlsx").write_text("anterior")
+    periodos = _tres_meses(crear_planilla)
+    resultado = importar(base, periodos, carpeta=salida, generar={(p.mes, p.año) for p in periodos})
+    assert [r.name for r in resultado.excel_generados] == [
+        "Liquidación Marzo 2026 (1).xlsx", "Liquidación Abril 2026.xlsx", "Liquidación Mayo 2026.xlsx"]
+    assert (salida / "Liquidación Marzo 2026.xlsx").read_text() == "anterior"
+
+
+def test_mes_salteado_genera_excel_sin_tocar_el_historial(crear_planilla, tmp_path, base):
+    salida = tmp_path / "salida"
+    salida.mkdir()
+    importar(base, analizar_archivos([crear_planilla([fila(1, "EXPSE 1")], nombre="viejo.xlsx")], MONTOS).periodos)
+    periodos = _tres_meses(crear_planilla)
+    resultado = importar(base, periodos, carpeta=salida, generar={(3, 2026)})
+    assert resultado.salteados == ["Marzo 2026"]
+    assert [r.name for r in resultado.excel_generados] == ["Liquidación Marzo 2026.xlsx"]
+    registrada = base_datos.buscar_liquidacion(base, 3, 2026)
+    assert (registrada.cantidad_ordenes, registrada.archivo_generado) == (1, None)
+
+
+def test_error_al_guardar_no_frena_los_demas(crear_planilla, tmp_path, base, monkeypatch):
+    salida = tmp_path / "salida"
+    salida.mkdir()
+    original = importacion.guardar_liquidacion
+
+    def guardar(liquidacion, carpeta, mes, año):
+        if mes == 4:
+            raise PermissionError("el archivo está abierto")
+        return original(liquidacion, carpeta, mes, año)
+
+    monkeypatch.setattr(importacion, "guardar_liquidacion", guardar)
+    periodos = _tres_meses(crear_planilla)
+    resultado = importar(base, periodos, carpeta=salida, generar={(p.mes, p.año) for p in periodos})
+    assert resultado.errores_excel == [("Abril 2026", "el archivo está abierto")]
+    assert len(resultado.excel_generados) == 2
+    assert len(resultado.registrados) == 3
+    assert base_datos.buscar_liquidacion(base, 4, 2026).archivo_generado is None
