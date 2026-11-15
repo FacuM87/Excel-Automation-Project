@@ -1,4 +1,6 @@
+import os
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import ttkbootstrap as tb
@@ -45,6 +47,14 @@ class PestanaConfiguracion:
         for tema in config.TEMAS:
             tb.Radiobutton(frame_tema, text=tema.capitalize(), value=tema, variable=self.var_tema,
                            command=lambda: app.cambiar_tema(self.var_tema.get())).pack(side=tk.LEFT, padx=(0, 20))
+
+        frame_datos = tb.Labelframe(self.marco, text="Datos de la aplicación (montos, ajustes e historial)",
+                                    padding=10)
+        frame_datos.pack(fill="x", pady=15)
+        self.directorio_datos = Path(app.archivo_base).parent
+        tb.Label(frame_datos, text=str(self.directorio_datos)).pack(side=tk.LEFT, fill="x", expand=True)
+        tb.Button(frame_datos, text="Abrir carpeta de datos", bootstyle="info-outline",
+                  command=self.abrir_carpeta_datos).pack(side=tk.RIGHT)
 
     # --- Prestaciones --- #
 
@@ -126,7 +136,10 @@ class PestanaConfiguracion:
                 montos[prestacion] = valor
         return montos, errores
 
-    # --- Carpeta --- #
+    # --- Carpetas --- #
+
+    def abrir_carpeta_datos(self):
+        os.startfile(self.directorio_datos)
 
     def elegir_carpeta(self, carpeta=None):
         if carpeta is None:

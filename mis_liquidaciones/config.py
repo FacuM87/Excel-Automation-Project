@@ -1,8 +1,13 @@
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
 from .procesamiento import normalizar_prestacion
+
+VERSION = "2.0"
+ARCHIVOS_DE_DATOS = ("prestaciones.json", "expse_montos.json", "ajustes.json", "liquidaciones.db")
 
 PRESTACIONES_POR_DEFECTO = [
     "EXPSE 1", "EXPSE 2", "EXPSE 4", "EXPSE 6", "EXPSE 7",
@@ -24,15 +29,39 @@ def obtener_directorio_recursos():
     return obtener_directorio_app()
 
 
+def migrar_datos(origen, destino):
+    """Copia los datos de origen a destino si destino todavía no tiene ninguno."""
+    if any((destino / nombre).exists() for nombre in ARCHIVOS_DE_DATOS):
+        return
+    for nombre in ARCHIVOS_DE_DATOS:
+        if (origen / nombre).is_file():
+            shutil.copy2(origen / nombre, destino / nombre)
+
+
+def obtener_directorio_datos():
+    """En el .exe, %APPDATA%\\MisLiquidaciones (con los datos que hubiera al lado del .exe);
+    desde el código, la carpeta del proyecto."""
+    if not getattr(sys, 'frozen', False):
+        return obtener_directorio_app()
+    destino = Path(os.environ.get("APPDATA") or Path.home()) / "MisLiquidaciones"
+    try:
+        destino.mkdir(parents=True, exist_ok=True)
+        migrar_datos(obtener_directorio_app(), destino)
+    except OSError:
+        return obtener_directorio_app()
+    return destino
+
+
 def obtener_ruta_guardado():
     escritorio = Path.home() / "Desktop"
     documentos = Path.home() / "Documents"
     return escritorio if escritorio.exists() else documentos if documentos.exists() else Path.home()
 
 
-ARCHIVO_MONTOS = obtener_directorio_app() / "prestaciones.json"
-ARCHIVOS_MONTOS_ANTERIORES = (obtener_directorio_app() / "expse_montos.json", Path("expse_montos.json"))
-ARCHIVO_BASE = obtener_directorio_app() / "liquidaciones.db"
+DIRECTORIO_DATOS = obtener_directorio_datos()
+ARCHIVO_MONTOS = DIRECTORIO_DATOS / "prestaciones.json"
+ARCHIVOS_MONTOS_ANTERIORES = (DIRECTORIO_DATOS / "expse_montos.json", Path("expse_montos.json"))
+ARCHIVO_BASE = DIRECTORIO_DATOS / "liquidaciones.db"
 
 
 def leer_json(ruta):
@@ -66,7 +95,7 @@ def guardar_montos(montos, archivo=ARCHIVO_MONTOS):
         json.dump(montos, file, indent=4, ensure_ascii=False)
 
 
-ARCHIVO_AJUSTES = obtener_directorio_app() / "ajustes.json"
+ARCHIVO_AJUSTES = DIRECTORIO_DATOS / "ajustes.json"
 TEMAS = {"claro": "flatly", "oscuro": "darkly"}
 AJUSTES_POR_DEFECTO = {"tema": "claro", "carpeta_guardado": ""}
 

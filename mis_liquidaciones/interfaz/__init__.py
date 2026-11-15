@@ -19,7 +19,7 @@ class VentanaPrincipal:
         self.ajustes = config.cargar_ajustes(archivo_ajustes)
         self.carpeta_guardado = config.carpeta_guardado(self.ajustes)
 
-        self.root = tb.Window(title="MisLiquidaciones", themename=config.TEMAS[self.ajustes["tema"]])
+        self.root = tb.Window(title=f"MisLiquidaciones {config.VERSION}", themename=config.TEMAS[self.ajustes["tema"]])
         self.root.minsize(760, 560)
         self.root.option_add("*TButton.cursor", "hand2")
         self._cargar_icono()

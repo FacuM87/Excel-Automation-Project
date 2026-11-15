@@ -1,8 +1,9 @@
 import json
+import sys
 
 from mis_liquidaciones.config import (
     AJUSTES_POR_DEFECTO, PRESTACIONES_POR_DEFECTO, cargar_ajustes, cargar_montos, carpeta_guardado, guardar_ajustes,
-    guardar_montos, obtener_ruta_guardado,
+    guardar_montos, migrar_datos, obtener_directorio_app, obtener_directorio_datos, obtener_ruta_guardado,
 )
 
 
@@ -77,3 +78,39 @@ def test_carpeta_guardado(tmp_path):
     assert carpeta_guardado({"carpeta_guardado": str(tmp_path)}) == tmp_path
     assert carpeta_guardado({"carpeta_guardado": str(tmp_path / "no-existe")}) == obtener_ruta_guardado()
     assert carpeta_guardado({"carpeta_guardado": ""}) == obtener_ruta_guardado()
+
+
+def test_migra_los_datos_si_el_destino_esta_vacio(tmp_path):
+    origen, destino = tmp_path / "exe", tmp_path / "datos"
+    origen.mkdir()
+    destino.mkdir()
+    (origen / "prestaciones.json").write_text("{}", encoding="utf-8")
+    (origen / "liquidaciones.db").write_bytes(b"base")
+    migrar_datos(origen, destino)
+    assert sorted(p.name for p in destino.iterdir()) == ["liquidaciones.db", "prestaciones.json"]
+
+
+def test_no_migra_si_el_destino_ya_tiene_datos(tmp_path):
+    origen, destino = tmp_path / "exe", tmp_path / "datos"
+    origen.mkdir()
+    destino.mkdir()
+    (origen / "liquidaciones.db").write_bytes(b"vieja")
+    (destino / "ajustes.json").write_text("{}", encoding="utf-8")
+    migrar_datos(origen, destino)
+    assert not (destino / "liquidaciones.db").exists()
+
+
+def test_directorio_datos_del_exe_en_appdata(tmp_path, monkeypatch):
+    exe = tmp_path / "exe"
+    exe.mkdir()
+    (exe / "ajustes.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe / "MisLiquidaciones.exe"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    directorio = obtener_directorio_datos()
+    assert directorio == tmp_path / "appdata" / "MisLiquidaciones"
+    assert (directorio / "ajustes.json").exists()
+
+
+def test_directorio_datos_desde_el_codigo_es_el_proyecto():
+    assert obtener_directorio_datos() == obtener_directorio_app()
