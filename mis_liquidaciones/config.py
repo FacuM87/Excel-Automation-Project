@@ -1,0 +1,65 @@
+import json
+import sys
+from pathlib import Path
+
+from .procesamiento import normalizar_prestacion
+
+PRESTACIONES_POR_DEFECTO = [
+    "EXPSE 1", "EXPSE 2", "EXPSE 4", "EXPSE 6", "EXPSE 7",
+    "ATEPSIQ", "PSICOMEY", "CONS", "CUES DES",
+]
+
+
+def obtener_directorio_app():
+    """Carpeta del .exe o del proyecto, independiente del directorio de trabajo."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def obtener_directorio_recursos():
+    """Carpeta de los archivos empaquetados (ícono) dentro del .exe, o la del proyecto."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    return obtener_directorio_app()
+
+
+def obtener_ruta_guardado():
+    escritorio = Path.home() / "Desktop"
+    documentos = Path.home() / "Documents"
+    return escritorio if escritorio.exists() else documentos if documentos.exists() else Path.home()
+
+
+ARCHIVO_MONTOS = obtener_directorio_app() / "prestaciones.json"
+ARCHIVOS_MONTOS_ANTERIORES = (obtener_directorio_app() / "expse_montos.json", Path("expse_montos.json"))
+
+
+def leer_json(ruta):
+    try:
+        with open(ruta, "r", encoding="utf-8") as file:
+            datos = json.load(file)
+        return {normalizar_prestacion(k): str(v) for k, v in datos.items()}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+
+
+def cargar_montos(archivo=ARCHIVO_MONTOS, anteriores=ARCHIVOS_MONTOS_ANTERIORES):
+    """Lee prestaciones.json; si no existe, migra los montos de expse_montos.json."""
+    if archivo.exists():
+        montos = leer_json(archivo)
+        if montos is not None:
+            return montos
+
+    montos = {}
+    for ruta in anteriores:
+        if ruta.exists():
+            montos = leer_json(ruta) or {}
+            break
+    for prestacion in PRESTACIONES_POR_DEFECTO:
+        montos.setdefault(prestacion, "")
+    return montos
+
+
+def guardar_montos(montos, archivo=ARCHIVO_MONTOS):
+    with open(archivo, "w", encoding="utf-8") as file:
+        json.dump(montos, file, indent=4, ensure_ascii=False)
