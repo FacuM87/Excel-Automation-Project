@@ -2,7 +2,7 @@
 import pytest
 
 from mis_liquidaciones.config import PRESTACIONES_POR_DEFECTO
-from mis_liquidaciones.procesamiento import leer_planilla_origen, liquidar, normalizar_prestacion
+from mis_liquidaciones.procesamiento import detectar_periodos, leer_planilla_origen, liquidar, normalizar_prestacion
 
 from .conftest import DIRECTORIO_DOCS
 
@@ -21,6 +21,17 @@ PSICOMEY_POR_ARCHIVO = {
     "dgOrdenes (1).XLSX": 1,
     "dgOrdenes (3).XLSX": 3,
     "dgOrdenes (6).XLSX": 2,
+}
+
+PERIODO_POR_ARCHIVO = {
+    "dgOrdenes.XLSX": (3, 2026),
+    "dgOrdenes (1).XLSX": (3, 2026),
+    "dgOrdenes (2).XLSX": (4, 2026),
+    "dgOrdenes (3).XLSX": (5, 2026),
+    "dgOrdenes (4).XLSX": (6, 2026),
+    "dgOrdenes (5).XLSX": (7, 2026),
+    "dgOrdenes (6).XLSX": (8, 2026),
+    "dgOrdenes (7).XLSX": (9, 2026),
 }
 
 MONTOS ={p: float(100 * (i + 1)) for i, p in enumerate(PRESTACIONES_POR_DEFECTO)}
@@ -70,3 +81,17 @@ def test_incluir_psicomey_mantiene_todas_las_ordenes(planilla_real):
     liquidacion = liquidar(planilla_real, MONTOS, incluir_opcional=True)
     assert liquidacion.excluidas_opcional == 0
     assert len(liquidacion.tabla) == ORDENES_POR_ARCHIVO[planilla_real.name]
+
+
+def test_detecta_el_periodo(planilla_real):
+    df, _ = leer_planilla_origen(planilla_real)
+    periodos = detectar_periodos(df)
+    assert len(periodos) == 1
+    assert (periodos[0].mes, periodos[0].año) == PERIODO_POR_ARCHIVO[planilla_real.name]
+    assert periodos[0].ordenes == ORDENES_POR_ARCHIVO[planilla_real.name]
+
+
+def test_liquidar_por_periodo_detectado_da_lo_mismo(planilla_real):
+    completa = liquidar(planilla_real, MONTOS, incluir_opcional=True)
+    por_periodo = liquidar(planilla_real, MONTOS, incluir_opcional=True, periodo=PERIODO_POR_ARCHIVO[planilla_real.name])
+    assert completa.tabla.equals(por_periodo.tabla)

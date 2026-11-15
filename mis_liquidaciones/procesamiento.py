@@ -30,6 +30,17 @@ class Liquidacion:
     excluidas_opcional: int = 0
 
 
+@dataclass
+class PeriodoDetectado:
+    mes: int
+    año: int
+    ordenes: int
+
+    @property
+    def nombre(self):
+        return f"{MESES[self.mes - 1]} {self.año}"
+
+
 def normalizar_prestacion(nombre):
     return " ".join(str(nombre).split()).upper()
 
@@ -83,10 +94,30 @@ def leer_planilla_origen(ruta):
     return df[COLUMNAS_SALIDA].reset_index(drop=True), no_cumplidas
 
 
-def liquidar(ruta, montos, incluir_opcional=False):
+def convertir_fechas(serie):
+    """Fechas de Excel o texto dd/mm/aaaa. Las inválidas quedan como NaT."""
+    if pd.api.types.is_datetime64_any_dtype(serie):
+        return serie
+    return pd.to_datetime(serie, dayfirst=True, errors="coerce", format="mixed")
+
+
+def detectar_periodos(df):
+    """Meses presentes en las órdenes, en orden cronológico. Lista vacía si no hay fechas válidas."""
+    fechas = convertir_fechas(df["Fecha"]).dropna()
+    conteo = fechas.groupby([fechas.dt.year.rename("año"), fechas.dt.month.rename("mes")]).size()
+    return [PeriodoDetectado(int(mes), int(año), int(n)) for (año, mes), n in conteo.items()]
+
+
+def liquidar(ruta, montos, incluir_opcional=False, periodo=None):
     """Lee la planilla y aplica los montos ({prestación: número}). Las prestaciones sin monto quedan en 0.
-    Si incluir_opcional es False, se quitan las filas de PRESTACION_OPCIONAL."""
+    Si incluir_opcional es False, se quitan las filas de PRESTACION_OPCIONAL.
+    Si se indica periodo (mes, año), solo se liquidan las órdenes de ese mes."""
     df, no_cumplidas = leer_planilla_origen(ruta)
+
+    if periodo is not None:
+        mes, año = periodo
+        fechas = convertir_fechas(df["Fecha"])
+        df = df[(fechas.dt.month == mes) & (fechas.dt.year == año)].reset_index(drop=True)
 
     normalizadas = df["Prestación"].fillna("").astype(str).map(normalizar_prestacion)
     excluidas_opcional = 0

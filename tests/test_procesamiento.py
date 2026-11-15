@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from mis_liquidaciones.procesamiento import (
-    FormatoInvalido, guardar_liquidacion, leer_planilla_origen, liquidar,
+    FormatoInvalido, PeriodoDetectado, detectar_periodos, guardar_liquidacion, leer_planilla_origen, liquidar,
     normalizar_prestacion, obtener_nombre_archivo_unico, parsear_monto, periodo_mes_vencido,
 )
 
@@ -209,3 +209,73 @@ def test_nombre_archivo_unico(tmp_path):
     assert segundo.name == "Liquidación Diciembre 2025 (1).xlsx"
     segundo.touch()
     assert obtener_nombre_archivo_unico(tmp_path, 12, 2025).name == "Liquidación Diciembre 2025 (2).xlsx"
+
+
+def test_detectar_un_solo_mes(crear_planilla):
+    ruta = crear_planilla([fila(1, "EXPSE 1", fecha="05/05/2026"), fila(2, "EXPSE 2", fecha="28/05/2026")])
+    df, _ = leer_planilla_origen(ruta)
+    periodos = detectar_periodos(df)
+    assert periodos == [PeriodoDetectado(5, 2026, 2)]
+    assert periodos[0].nombre == "Mayo 2026"
+
+
+def test_detectar_fechas_de_excel(crear_planilla):
+    ruta = crear_planilla([
+        fila(1, "EXPSE 1", fecha=datetime(2026, 7, 2, 7, 1, 28)),
+        fila(2, "EXPSE 1", fecha=datetime(2026, 7, 31, 6, 50)),
+    ])
+    df, _ = leer_planilla_origen(ruta)
+    assert detectar_periodos(df) == [PeriodoDetectado(7, 2026, 2)]
+
+
+def test_detectar_varios_meses_en_orden_cronologico(crear_planilla):
+    ruta = crear_planilla([
+        fila(1, "EXPSE 1", fecha="03/01/2026"),
+        fila(2, "EXPSE 1", fecha="20/12/2025"),
+        fila(3, "EXPSE 2", fecha="15/01/2026"),
+        fila(4, "EXPSE 1", fecha="02/02/2026"),
+    ])
+    df, _ = leer_planilla_origen(ruta)
+    assert detectar_periodos(df) == [
+        PeriodoDetectado(12, 2025, 1),
+        PeriodoDetectado(1, 2026, 2),
+        PeriodoDetectado(2, 2026, 1),
+    ]
+
+
+def test_detectar_ignora_fechas_invalidas(crear_planilla):
+    ruta = crear_planilla([fila(1, "EXPSE 1", fecha="sin fecha"), fila(2, "EXPSE 1", fecha="10/03/2026")])
+    df, _ = leer_planilla_origen(ruta)
+    assert detectar_periodos(df) == [PeriodoDetectado(3, 2026, 1)]
+
+
+def test_detectar_sin_fechas_validas(crear_planilla):
+    ruta = crear_planilla([fila(1, "EXPSE 1", fecha="sin fecha")])
+    df, _ = leer_planilla_origen(ruta)
+    assert detectar_periodos(df) == []
+
+
+def test_liquidar_por_periodo(crear_planilla):
+    ruta = crear_planilla([
+        fila(1, "EXPSE 1", fecha="10/03/2026"),
+        fila(2, "PSICOMEY", fecha="11/03/2026"),
+        fila(3, "EXPSE 2", fecha="05/04/2026"),
+        fila(4, "NUEVA", fecha="06/04/2026"),
+        fila(5, "EXPSE 1", fecha="sin fecha"),
+    ])
+    montos = {"EXPSE 1": 100.0, "EXPSE 2": 200.0}
+
+    marzo = liquidar(ruta, montos, periodo=(3, 2026))
+    assert list(marzo.tabla["Trabajador"]) == ["Trabajador 1"]
+    assert marzo.total == 100.0
+    assert marzo.excluidas_opcional == 1
+    assert marzo.sin_monto == []
+
+    abril = liquidar(ruta, montos, periodo=(4, 2026))
+    assert list(abril.tabla["Trabajador"]) == ["Trabajador 3", "Trabajador 4"]
+    assert abril.total == 200.0
+    assert abril.excluidas_opcional == 0
+    assert abril.sin_monto == ["NUEVA"]
+
+    assert len(liquidar(ruta, montos, periodo=(5, 2026)).tabla) == 0
+    assert len(liquidar(ruta, montos).tabla) == 4
