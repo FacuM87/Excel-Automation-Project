@@ -11,6 +11,7 @@ MESES = [
 ]
 
 COLUMNAS_SALIDA = ["Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
+COLUMNA_ORDEN = "Orden"
 FILAS_BUSQUEDA_ENCABEZADO = 10
 PRESTACION_OPCIONAL = "PSICOMEY"
 
@@ -28,6 +29,10 @@ class Liquidacion:
     sin_monto: list = field(default_factory=list)
     cantidad_sin_monto: int = 0
     excluidas_opcional: int = 0
+
+    @property
+    def tiene_numero_orden(self):
+        return COLUMNA_ORDEN in self.tabla.columns
 
 
 @dataclass
@@ -57,6 +62,33 @@ def parsear_monto(texto):
         return float(texto)
     except ValueError:
         return None
+
+
+def formatear_monto(valor):
+    """1234567.5 -> '1.234.567,50'; sin decimales si es entero."""
+    texto = f"{valor:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    return texto[:-3] if texto.endswith(",00") else texto
+
+
+def normalizar_orden(valor):
+    """Número de orden como entero si es posible, texto si no, None si falta."""
+    if pd.isna(valor) or str(valor).strip() == "":
+        return None
+    try:
+        numero = float(valor)
+        if numero.is_integer():
+            return int(numero)
+    except (TypeError, ValueError):
+        pass
+    return str(valor).strip()
+
+
+def ordenes_repetidas(df):
+    """Números de orden que aparecen más de una vez en la tabla."""
+    if COLUMNA_ORDEN not in df.columns:
+        return []
+    numeros = df[COLUMNA_ORDEN].dropna()
+    return sorted(set(numeros[numeros.duplicated()]), key=str)
 
 
 def periodo_mes_vencido(hoy=None):
@@ -91,7 +123,12 @@ def leer_planilla_origen(ruta):
         no_cumplidas = int((~es_cumplida).sum())
         df = df[es_cumplida]
 
-    return df[COLUMNAS_SALIDA].reset_index(drop=True), no_cumplidas
+    columnas = COLUMNAS_SALIDA
+    if COLUMNA_ORDEN in df.columns:
+        numeros = pd.Series([normalizar_orden(v) for v in df[COLUMNA_ORDEN]], index=df.index, dtype=object)
+        df = df.assign(**{COLUMNA_ORDEN: numeros})
+        columnas = [COLUMNA_ORDEN] + COLUMNAS_SALIDA
+    return df[columnas].reset_index(drop=True), no_cumplidas
 
 
 def convertir_fechas(serie):
@@ -157,7 +194,7 @@ def obtener_nombre_archivo_unico(carpeta, mes, año):
 
 def guardar_liquidacion(liquidacion, carpeta, mes, año):
     """Guarda la liquidación con la fila TOTAL y devuelve la ruta del archivo generado."""
-    df = liquidacion.tabla.copy()
+    df = liquidacion.tabla.drop(columns=COLUMNA_ORDEN, errors="ignore")
     df.loc[len(df)] = ["TOTAL", "", "", "", "", liquidacion.total]
     ruta = obtener_nombre_archivo_unico(carpeta, mes, año)
     df.to_excel(ruta, index=False, header=True)

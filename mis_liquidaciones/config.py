@@ -32,6 +32,7 @@ def obtener_ruta_guardado():
 
 ARCHIVO_MONTOS = obtener_directorio_app() / "prestaciones.json"
 ARCHIVOS_MONTOS_ANTERIORES = (obtener_directorio_app() / "expse_montos.json", Path("expse_montos.json"))
+ARCHIVO_BASE = obtener_directorio_app() / "liquidaciones.db"
 
 
 def leer_json(ruta):

@@ -1,18 +1,21 @@
 import os
 import subprocess
 import tkinter as tk
+from contextlib import closing, nullcontext
 from tkinter import filedialog, messagebox, ttk
 
-from . import config
+from . import base_datos, config
 from .procesamiento import (
-    MESES, PRESTACION_OPCIONAL, FormatoInvalido, detectar_periodos, guardar_liquidacion,
-    leer_planilla_origen, liquidar, normalizar_prestacion, parsear_monto, periodo_mes_vencido,
+    MESES, PRESTACION_OPCIONAL, FormatoInvalido, detectar_periodos, formatear_monto, guardar_liquidacion,
+    leer_planilla_origen, liquidar, normalizar_prestacion, ordenes_repetidas, parsear_monto, periodo_mes_vencido,
 )
 
 
 class VentanaPrincipal:
-    def __init__(self, archivo_montos=config.ARCHIVO_MONTOS, archivos_anteriores=config.ARCHIVOS_MONTOS_ANTERIORES):
+    def __init__(self, archivo_montos=config.ARCHIVO_MONTOS, archivos_anteriores=config.ARCHIVOS_MONTOS_ANTERIORES,
+                 archivo_base=config.ARCHIVO_BASE):
         self.archivo_montos = archivo_montos
+        self.archivo_base = archivo_base
         self.montos_prestaciones = config.cargar_montos(archivo_montos, archivos_anteriores)
         self.carpeta_guardado = config.obtener_ruta_guardado()
         self.ruta_archivo_seleccionado = None
@@ -266,16 +269,13 @@ class VentanaPrincipal:
 
         self.guardar_montos()
         incluir_opcional = self.var_incluir_opcional.get()
+        periodos = [(p.mes, p.año) for p in self.periodos_detectados] if varios_meses else [(mes, año)]
 
         try:
             if varios_meses:
-                resultados = []
-                for p in self.periodos_detectados:
-                    liquidacion = liquidar(self.ruta_archivo_seleccionado, montos, incluir_opcional, (p.mes, p.año))
-                    resultados.append((liquidacion, guardar_liquidacion(liquidacion, self.carpeta_guardado, p.mes, p.año)))
+                liquidaciones = [liquidar(self.ruta_archivo_seleccionado, montos, incluir_opcional, p) for p in periodos]
             else:
-                liquidacion = liquidar(self.ruta_archivo_seleccionado, montos, incluir_opcional)
-                resultados = [(liquidacion, guardar_liquidacion(liquidacion, self.carpeta_guardado, mes, año))]
+                liquidaciones = [liquidar(self.ruta_archivo_seleccionado, montos, incluir_opcional)]
         except FormatoInvalido as e:
             messagebox.showerror("Formato no reconocido", f"El archivo no tiene el formato esperado.\n{e}")
             return
@@ -286,13 +286,92 @@ class VentanaPrincipal:
             messagebox.showerror("Error", f"No se pudo procesar el archivo\n{e}")
             return
 
+        advertencias = []
+        try:
+            con = base_datos.abrir(self.archivo_base)
+        except Exception as e:
+            con = None
+            advertencias.append(f"No se pudo abrir el historial ({self.archivo_base}); no se registró nada.\n{e}")
+
+        with closing(con) if con else nullcontext():
+            registrar = self._confirmar_registro(con, liquidaciones, periodos, advertencias)
+            if registrar is None:
+                return
+
+            resultados = []
+            for liquidacion, (mes, año), registrar_periodo in zip(liquidaciones, periodos, registrar):
+                try:
+                    ruta = guardar_liquidacion(liquidacion, self.carpeta_guardado, mes, año)
+                except Exception as e:
+                    messagebox.showerror("Error", f"No se pudo guardar la liquidación de {MESES[mes - 1]} {año}\n{e}")
+                    return
+                estado = "no se registró en el historial"
+                if con and registrar_periodo:
+                    try:
+                        reemplazada = base_datos.guardar(
+                            con, mes, año, liquidacion, self.ruta_archivo_seleccionado, ruta, incluir_opcional)
+                        estado = "reemplazó la registrada en el historial" if reemplazada else "registrada en el historial"
+                    except Exception as e:
+                        advertencias.append(
+                            f"La liquidación de {MESES[mes - 1]} {año} se generó, pero no se pudo registrar "
+                            f"en el historial.\n{e}")
+                resultados.append((liquidacion, ruta, estado))
+
         self.ruta_archivo_modificado = resultados[-1][1]
-        self._mostrar_resultado(resultados, varios_meses)
+        self._mostrar_resultado(resultados, varios_meses, advertencias)
         self.btn_abrir_ubicacion.config(state=tk.NORMAL)
 
-    def _mostrar_resultado(self, resultados, varios_meses=False):
-        """resultados: lista de (liquidacion, ruta). Junta los avisos de todas las liquidaciones."""
-        liquidaciones = [liq for liq, _ in resultados]
+    def _confirmar_registro(self, con, liquidaciones, periodos, advertencias):
+        """Pregunta por períodos ya registrados y órdenes repetidas. Devuelve, por período, si se registra
+        en la base, o None si se cancela."""
+        registrar = []
+        repetidas = []
+        for liquidacion, (mes, año) in zip(liquidaciones, periodos):
+            nombre = f"{MESES[mes - 1]} {año}"
+            if not liquidacion.tiene_numero_orden:
+                advertencias.append(
+                    f"El archivo no tiene la columna Orden: no se pudo verificar si hay órdenes repetidas ({nombre}).")
+            else:
+                en_archivo = ordenes_repetidas(liquidacion.tabla)
+                if en_archivo:
+                    repetidas.append(f"  • {len(en_archivo)} orden(es) aparecen más de una vez en el archivo "
+                                     f"({nombre}): {_listar(en_archivo)}")
+            if con is None:
+                registrar.append(False)
+                continue
+
+            existente = base_datos.buscar_liquidacion(con, mes, año)
+            if existente:
+                respuesta = messagebox.askyesnocancel(
+                    "Período ya registrado",
+                    f"Ya hay una liquidación de {nombre} registrada el {existente.generada:%d/%m/%Y} "
+                    f"({existente.cantidad_ordenes} órdenes, total $ {formatear_monto(existente.total)}).\n\n"
+                    f"¿Reemplazarla?\n\n"
+                    f"Sí: reemplaza la registrada y genera el Excel.\n"
+                    f"No: genera solo el Excel, sin cambiar el historial.\n"
+                    f"Cancelar: no hace nada.")
+                if respuesta is None:
+                    return None
+                registrar.append(respuesta)
+            else:
+                registrar.append(True)
+
+            if liquidacion.tiene_numero_orden:
+                otras = base_datos.buscar_ordenes_registradas(con, liquidacion.tabla["Orden"], (mes, año))
+                for (mes_otro, año_otro), numeros in otras.items():
+                    repetidas.append(f"  • {len(numeros)} orden(es) de {nombre} ya están en la liquidación de "
+                                     f"{MESES[mes_otro - 1]} {año_otro}: {_listar(numeros)}")
+
+        if repetidas and not messagebox.askyesno(
+                "Órdenes repetidas",
+                "Se encontraron órdenes repetidas:\n\n" + "\n".join(repetidas) +
+                "\n\nSi continuás, se liquidan igual. ¿Continuar?"):
+            return None
+        return registrar
+
+    def _mostrar_resultado(self, resultados, varios_meses=False, otras_advertencias=()):
+        """resultados: lista de (liquidacion, ruta, estado). Junta los avisos de todas las liquidaciones."""
+        liquidaciones = [liq for liq, _, _ in resultados]
         no_cumplidas = liquidaciones[0].no_cumplidas
         sin_monto = sorted({p for liq in liquidaciones for p in liq.sin_monto})
         cantidad_sin_monto = sum(liq.cantidad_sin_monto for liq in liquidaciones)
@@ -310,11 +389,13 @@ class VentanaPrincipal:
         if varios_meses and self.ordenes_sin_fecha:
             advertencias.append(
                 f"{self.ordenes_sin_fecha} orden(es) sin fecha válida no se incluyeron en ninguna liquidación.")
+        advertencias.extend(otras_advertencias)
 
         if len(resultados) == 1:
-            mensaje = f"Archivo guardado en: {resultados[0][1]}"
+            mensaje = f"Archivo guardado en: {resultados[0][1]}\nLiquidación {resultados[0][2]}."
         else:
-            archivos = "\n".join(f"  • {ruta.name} ({len(liq.tabla)} orden(es))" for liq, ruta in resultados)
+            archivos = "\n".join(
+                f"  • {ruta.name} ({len(liq.tabla)} orden(es)): {estado}" for liq, ruta, estado in resultados)
             mensaje = f"Se generaron {len(resultados)} liquidaciones en {resultados[0][1].parent}:\n{archivos}"
         if excluidas_opcional:
             mensaje += (
@@ -333,3 +414,8 @@ class VentanaPrincipal:
             subprocess.run(["explorer", carpeta] if os.name == "nt" else ["xdg-open", carpeta])
         else:
             messagebox.showwarning("Aviso", "No hay archivo generado aún.")
+
+
+def _listar(numeros, maximo=10):
+    texto = ", ".join(str(n) for n in numeros[:maximo])
+    return texto + (f" y {len(numeros) - maximo} más" if len(numeros) > maximo else "")

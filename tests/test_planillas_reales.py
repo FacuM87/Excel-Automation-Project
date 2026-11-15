@@ -1,8 +1,11 @@
 """Tests con los Excel recibidos en docs/. Solo corren de forma local: si los archivos no están, se saltean."""
 import pytest
 
+from mis_liquidaciones import base_datos
 from mis_liquidaciones.config import PRESTACIONES_POR_DEFECTO
-from mis_liquidaciones.procesamiento import detectar_periodos, leer_planilla_origen, liquidar, normalizar_prestacion
+from mis_liquidaciones.procesamiento import (
+    detectar_periodos, leer_planilla_origen, liquidar, normalizar_prestacion, ordenes_repetidas,
+)
 
 from .conftest import DIRECTORIO_DOCS
 
@@ -95,3 +98,57 @@ def test_liquidar_por_periodo_detectado_da_lo_mismo(planilla_real):
     completa = liquidar(planilla_real, MONTOS, incluir_opcional=True)
     por_periodo = liquidar(planilla_real, MONTOS, incluir_opcional=True, periodo=PERIODO_POR_ARCHIVO[planilla_real.name])
     assert completa.tabla.equals(por_periodo.tabla)
+
+
+def _real(nombre):
+    ruta = DIRECTORIO_DOCS / nombre
+    if not ruta.exists():
+        pytest.skip(f"{nombre} no está en docs/")
+    return ruta
+
+
+def test_sin_ordenes_repetidas_en_el_archivo(planilla_real):
+    df, _ = leer_planilla_origen(planilla_real)
+    assert df["Orden"].notna().all()
+    assert ordenes_repetidas(df) == []
+
+
+def test_guardar_en_la_base(planilla_real, tmp_path):
+    liquidacion = liquidar(planilla_real, MONTOS, incluir_opcional=True)
+    mes, año = PERIODO_POR_ARCHIVO[planilla_real.name]
+    with base_datos.abrir(tmp_path / "base.db") as con:
+        base_datos.guardar(con, mes, año, liquidacion, planilla_real)
+        registrada = base_datos.buscar_liquidacion(con, mes, año)
+        ordenes = base_datos.leer_ordenes(con, registrada.id)
+    con.close()
+    assert registrada.cantidad_ordenes == ORDENES_POR_ARCHIVO[planilla_real.name]
+    assert registrada.total == pytest.approx(liquidacion.total)
+    assert ordenes["monto"].sum() == pytest.approx(liquidacion.total)
+    assert ordenes["fecha"].notna().all()
+    assert ordenes["trabajador"].notna().all()
+
+
+def test_caso_h6_reemplaza_marzo_sin_duplicar(tmp_path):
+    parcial = liquidar(_real("dgOrdenes.XLSX"), MONTOS, incluir_opcional=True)
+    completa = liquidar(_real("dgOrdenes (1).XLSX"), MONTOS, incluir_opcional=True)
+    con = base_datos.abrir(tmp_path / "base.db")
+    base_datos.guardar(con, 3, 2026, parcial)
+    assert base_datos.buscar_ordenes_registradas(con, completa.tabla["Orden"], excluir_periodo=(3, 2026)) == {}
+    assert len(base_datos.buscar_ordenes_registradas(con, completa.tabla["Orden"])[(3, 2026)]) == 40
+    assert base_datos.guardar(con, 3, 2026, completa)
+    assert base_datos.buscar_liquidacion(con, 3, 2026).cantidad_ordenes == 143
+    assert con.execute("SELECT COUNT(*) FROM ordenes").fetchone()[0] == 143
+    con.close()
+
+
+def test_archivos_numerados_sin_duplicados_entre_si(tmp_path):
+    con = base_datos.abrir(tmp_path / "base.db")
+    for nombre in sorted(ORDENES_POR_ARCHIVO):
+        if nombre == "dgOrdenes.XLSX":
+            continue
+        liquidacion = liquidar(_real(nombre), MONTOS, incluir_opcional=True)
+        mes, año = PERIODO_POR_ARCHIVO[nombre]
+        assert base_datos.buscar_ordenes_registradas(con, liquidacion.tabla["Orden"], (mes, año)) == {}
+        base_datos.guardar(con, mes, año, liquidacion)
+    assert len(base_datos.listar_liquidaciones(con)) == 7
+    con.close()

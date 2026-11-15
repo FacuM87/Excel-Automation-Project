@@ -4,8 +4,9 @@ import pandas as pd
 import pytest
 
 from mis_liquidaciones.procesamiento import (
-    FormatoInvalido, PeriodoDetectado, detectar_periodos, guardar_liquidacion, leer_planilla_origen, liquidar,
-    normalizar_prestacion, obtener_nombre_archivo_unico, parsear_monto, periodo_mes_vencido,
+    FormatoInvalido, PeriodoDetectado, detectar_periodos, formatear_monto, guardar_liquidacion, leer_planilla_origen,
+    liquidar, normalizar_orden, normalizar_prestacion, obtener_nombre_archivo_unico, ordenes_repetidas, parsear_monto,
+    periodo_mes_vencido,
 )
 
 from .conftest import ENCABEZADOS, fila
@@ -54,7 +55,7 @@ def test_lee_encabezado_en_fila_2_sin_perder_la_primera_orden(crear_planilla):
     assert len(df) == 3
     assert df.loc[0, "Trabajador"] == "Trabajador 1"
     assert no_cumplidas == 0
-    assert list(df.columns) == ["Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
+    assert list(df.columns) == ["Orden", "Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
 
 
 def test_lee_planilla_sin_titulo(crear_planilla):
@@ -279,3 +280,48 @@ def test_liquidar_por_periodo(crear_planilla):
 
     assert len(liquidar(ruta, montos, periodo=(5, 2026)).tabla) == 0
     assert len(liquidar(ruta, montos).tabla) == 4
+
+
+@pytest.mark.parametrize("entrada, esperado", [
+    (14160052, 14160052),
+    (14160052.0, 14160052),
+    ("14160052", 14160052),
+    (" A-12 ", "A-12"),
+    (None, None),
+    (float("nan"), None),
+    ("", None),
+])
+def test_normalizar_orden(entrada, esperado):
+    assert normalizar_orden(entrada) == esperado
+
+
+@pytest.mark.parametrize("valor, esperado", [
+    (120000, "120.000"),
+    (1234567.5, "1.234.567,50"),
+    (0, "0"),
+])
+def test_formatear_monto(valor, esperado):
+    assert formatear_monto(valor) == esperado
+
+
+def test_conserva_orden_y_no_la_escribe_en_el_excel(crear_planilla, tmp_path):
+    ruta = crear_planilla([fila(1, "EXPSE 1"), fila(2, "EXPSE 2")])
+    liquidacion = liquidar(ruta, {"EXPSE 1": 100.0})
+    assert liquidacion.tiene_numero_orden
+    assert list(liquidacion.tabla["Orden"]) == [1, 2]
+    df = pd.read_excel(guardar_liquidacion(liquidacion, tmp_path, 3, 2026))
+    assert "Orden" not in df.columns
+
+
+def test_planilla_sin_columna_orden(crear_planilla):
+    encabezados = [c for c in ENCABEZADOS if c != "Orden"]
+    ruta = crear_planilla([fila(1, "EXPSE 1")[1:]], encabezados=encabezados)
+    liquidacion = liquidar(ruta, {"EXPSE 1": 100.0})
+    assert not liquidacion.tiene_numero_orden
+    assert ordenes_repetidas(liquidacion.tabla) == []
+
+
+def test_ordenes_repetidas(crear_planilla):
+    ruta = crear_planilla([fila(1, "EXPSE 1"), fila(2, "EXPSE 2"), fila(1, "EXPSE 1"), fila(3, "EXPSE 4")])
+    df, _ = leer_planilla_origen(ruta)
+    assert ordenes_repetidas(df) == [1]
