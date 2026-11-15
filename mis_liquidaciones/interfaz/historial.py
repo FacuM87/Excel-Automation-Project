@@ -94,6 +94,8 @@ class PestanaHistorial:
                 self.tabla.selection_set(str(r.id))
                 self.tabla.see(str(r.id))
         self.mostrar_detalle()
+        if getattr(self.app, "reportes", None):
+            self.app.reportes.actualizar()
 
     def mostrar_detalle(self):
         self.tabla_ordenes.delete(*self.tabla_ordenes.get_children())
