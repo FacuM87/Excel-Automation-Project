@@ -1,7 +1,7 @@
 """Tests con los Excel recibidos en docs/. Solo corren de forma local: si los archivos no están, se saltean."""
 import pytest
 
-from mis_liquidaciones import base_datos
+from mis_liquidaciones import base_datos, importacion
 from mis_liquidaciones.config import PRESTACIONES_POR_DEFECTO
 from mis_liquidaciones.procesamiento import (
     detectar_periodos, leer_planilla_origen, liquidar, normalizar_prestacion, ordenes_repetidas,
@@ -150,5 +150,21 @@ def test_archivos_numerados_sin_duplicados_entre_si(tmp_path):
         mes, año = PERIODO_POR_ARCHIVO[nombre]
         assert base_datos.buscar_ordenes_registradas(con, liquidacion.tabla["Orden"], (mes, año)) == {}
         base_datos.guardar(con, mes, año, liquidacion)
+    assert len(base_datos.listar_liquidaciones(con)) == 7
+    con.close()
+
+
+@pytest.mark.parametrize("incluir_opcional, marzo", [(False, 142), (True, 143)])
+def test_importar_todo_el_historial(tmp_path, incluir_opcional, marzo):
+    rutas = [_real(nombre) for nombre in ORDENES_POR_ARCHIVO]
+    analisis = importacion.analizar_archivos(rutas, MONTOS, incluir_opcional)
+    assert analisis.errores == []
+    assert [(p.mes, p.año) for p in analisis.periodos] == [(m, 2026) for m in range(3, 10)]
+    assert analisis.periodos[0].duplicadas_descartadas == 40
+    con = base_datos.abrir(tmp_path / "base.db")
+    importacion.importar(con, analisis.periodos, incluye_opcional=incluir_opcional)
+    assert base_datos.buscar_liquidacion(con, 3, 2026).cantidad_ordenes == marzo
+    total, distintas = con.execute("SELECT COUNT(*), COUNT(DISTINCT orden) FROM ordenes").fetchone()
+    assert total == distintas
     assert len(base_datos.listar_liquidaciones(con)) == 7
     con.close()

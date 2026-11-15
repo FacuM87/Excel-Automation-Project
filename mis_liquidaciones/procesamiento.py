@@ -156,6 +156,12 @@ def liquidar(ruta, montos, incluir_opcional=False, periodo=None):
         fechas = convertir_fechas(df["Fecha"])
         df = df[(fechas.dt.month == mes) & (fechas.dt.year == año)].reset_index(drop=True)
 
+    return aplicar_montos(df, montos, incluir_opcional, no_cumplidas)
+
+
+def aplicar_montos(df, montos, incluir_opcional=False, no_cumplidas=0):
+    """Liquida una tabla ya leída: quita PRESTACION_OPCIONAL si corresponde y agrega la columna Monto."""
+    df = df.reset_index(drop=True)
     normalizadas = df["Prestación"].fillna("").astype(str).map(normalizar_prestacion)
     excluidas_opcional = 0
     if not incluir_opcional:
@@ -165,6 +171,7 @@ def liquidar(ruta, montos, incluir_opcional=False, periodo=None):
         normalizadas = normalizadas[~es_opcional].reset_index(drop=True)
 
     montos_normalizados = {normalizar_prestacion(k): v for k, v in montos.items()}
+    df = df.copy()
     df["Monto"] = normalizadas.map(montos_normalizados)
 
     mascara_sin_monto = df["Monto"].isna()
