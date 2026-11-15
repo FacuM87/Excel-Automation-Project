@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,11 +33,12 @@ def normalizar_prestacion(nombre):
 
 
 def parsear_monto(texto):
-    """Convierte el texto ingresado a número. Vacío = 0. Acepta coma decimal. Devuelve None si es inválido."""
+    """Convierte el texto ingresado a número. Vacío = 0. Acepta coma decimal y punto de miles
+    (1.000 = mil). Devuelve None si es inválido."""
     texto = texto.strip().replace(" ", "")
     if texto == "":
         return 0.0
-    if "," in texto:
+    if "," in texto or re.fullmatch(r"\d{1,3}(\.\d{3})+", texto):
         texto = texto.replace(".", "").replace(",", ".")
     try:
         return float(texto)
