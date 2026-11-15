@@ -12,6 +12,7 @@ MESES = [
 
 COLUMNAS_SALIDA = ["Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
 FILAS_BUSQUEDA_ENCABEZADO = 10
+PRESTACION_OPCIONAL = "PSICOMEY"
 
 
 class FormatoInvalido(Exception):
@@ -26,6 +27,7 @@ class Liquidacion:
     no_cumplidas: int = 0
     sin_monto: list = field(default_factory=list)
     cantidad_sin_monto: int = 0
+    excluidas_opcional: int = 0
 
 
 def normalizar_prestacion(nombre):
@@ -81,13 +83,21 @@ def leer_planilla_origen(ruta):
     return df[COLUMNAS_SALIDA].reset_index(drop=True), no_cumplidas
 
 
-def liquidar(ruta, montos):
-    """Lee la planilla y aplica los montos ({prestación: número}). Las prestaciones sin monto quedan en 0."""
+def liquidar(ruta, montos, incluir_opcional=False):
+    """Lee la planilla y aplica los montos ({prestación: número}). Las prestaciones sin monto quedan en 0.
+    Si incluir_opcional es False, se quitan las filas de PRESTACION_OPCIONAL."""
     df, no_cumplidas = leer_planilla_origen(ruta)
 
+    normalizadas = df["Prestación"].fillna("").astype(str).map(normalizar_prestacion)
+    excluidas_opcional = 0
+    if not incluir_opcional:
+        es_opcional = normalizadas == PRESTACION_OPCIONAL
+        excluidas_opcional = int(es_opcional.sum())
+        df = df[~es_opcional].reset_index(drop=True)
+        normalizadas = normalizadas[~es_opcional].reset_index(drop=True)
+
     montos_normalizados = {normalizar_prestacion(k): v for k, v in montos.items()}
-    prestaciones = df["Prestación"].fillna("").astype(str).str.strip()
-    df["Monto"] = prestaciones.map(normalizar_prestacion).map(montos_normalizados)
+    df["Monto"] = normalizadas.map(montos_normalizados)
 
     mascara_sin_monto = df["Monto"].isna()
     df["Monto"] = df["Monto"].fillna(0)
@@ -96,8 +106,9 @@ def liquidar(ruta, montos):
         tabla=df,
         total=df["Monto"].sum(),
         no_cumplidas=no_cumplidas,
-        sin_monto=sorted(set(prestaciones[mascara_sin_monto])),
+        sin_monto=sorted(set(normalizadas[mascara_sin_monto])),
         cantidad_sin_monto=int(mascara_sin_monto.sum()),
+        excluidas_opcional=excluidas_opcional,
     )
 
 

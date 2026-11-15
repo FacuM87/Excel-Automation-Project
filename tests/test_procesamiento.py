@@ -124,12 +124,60 @@ def test_liquidar_prestaciones_sin_monto(crear_planilla):
         fila(3, "PSICOMEY"),
         fila(4, "NUEVA"),
         fila(5, None),
+        fila(6, " nueva "),
     ])
-    liquidacion = liquidar(ruta, {"EXPSE 1": 100.0})
+    liquidacion = liquidar(ruta, {"EXPSE 1": 100.0}, incluir_opcional=True)
     assert liquidacion.total == 100.0
     assert liquidacion.sin_monto == ["", "NUEVA", "PSICOMEY"]
-    assert liquidacion.cantidad_sin_monto == 4
-    assert list(liquidacion.tabla["Monto"]) == [100.0, 0, 0, 0, 0]
+    assert liquidacion.cantidad_sin_monto == 5
+    assert list(liquidacion.tabla["Monto"]) == [100.0, 0, 0, 0, 0, 0]
+
+
+def planilla_con_psicomey(crear_planilla):
+    return crear_planilla([
+        fila(1, "EXPSE 1"),
+        fila(2, "PSICOMEY"),
+        fila(3, "EXPSE 2"),
+        fila(4, " psicomey "),
+        fila(5, "EXPSE 1"),
+    ])
+
+
+def test_sin_incluir_opcional_quita_psicomey(crear_planilla):
+    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0, "PSICOMEY": 500.0})
+    assert liquidacion.excluidas_opcional == 2
+    assert list(liquidacion.tabla["Trabajador"]) == ["Trabajador 1", "Trabajador 3", "Trabajador 5"]
+    assert list(liquidacion.tabla["Monto"]) == [100.0, 200.0, 100.0]
+    assert liquidacion.total == 400.0
+    assert list(liquidacion.tabla.index) == [0, 1, 2]
+
+
+def test_sin_incluir_opcional_no_avisa_psicomey_sin_monto(crear_planilla):
+    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0})
+    assert liquidacion.sin_monto == []
+    assert liquidacion.cantidad_sin_monto == 0
+
+
+def test_incluir_opcional_liquida_psicomey(crear_planilla):
+    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0, "PSICOMEY": 500.0},
+                           incluir_opcional=True)
+    assert liquidacion.excluidas_opcional == 0
+    assert len(liquidacion.tabla) == 5
+    assert liquidacion.total == 1400.0
+
+
+def test_incluir_opcional_sin_monto_avisa(crear_planilla):
+    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0}, incluir_opcional=True)
+    assert liquidacion.sin_monto == ["PSICOMEY"]
+    assert liquidacion.cantidad_sin_monto == 2
+
+
+def test_guardar_sin_psicomey(crear_planilla, tmp_path):
+    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0})
+    df = pd.read_excel(guardar_liquidacion(liquidacion, tmp_path, 3, 2026))
+    assert len(df) == 4
+    assert "PSICOMEY" not in set(df["Prestación"].astype(str).str.upper())
+    assert df.iloc[-1]["Monto"] == 400.0
 
 
 def test_liquidar_informa_no_cumplidas(crear_planilla):

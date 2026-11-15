@@ -17,7 +17,13 @@ ORDENES_POR_ARCHIVO = {
     "dgOrdenes (7).XLSX": 93,
 }
 
-MONTOS = {p: float(100 * (i + 1)) for i, p in enumerate(PRESTACIONES_POR_DEFECTO)}
+PSICOMEY_POR_ARCHIVO = {
+    "dgOrdenes (1).XLSX": 1,
+    "dgOrdenes (3).XLSX": 3,
+    "dgOrdenes (6).XLSX": 2,
+}
+
+MONTOS ={p: float(100 * (i + 1)) for i, p in enumerate(PRESTACIONES_POR_DEFECTO)}
 
 
 @pytest.fixture(params=sorted(ORDENES_POR_ARCHIVO))
@@ -44,8 +50,23 @@ def test_prestaciones_conocidas(planilla_real):
     assert set(df["Prestación"].map(normalizar_prestacion)) <= set(PRESTACIONES_POR_DEFECTO)
 
 
-def test_total_es_la_suma(planilla_real):
-    liquidacion = liquidar(planilla_real, MONTOS)
+@pytest.mark.parametrize("incluir_opcional", [False, True], ids=["sin_psicomey", "con_psicomey"])
+def test_total_es_la_suma(planilla_real, incluir_opcional):
+    liquidacion = liquidar(planilla_real, MONTOS, incluir_opcional)
     assert liquidacion.cantidad_sin_monto == 0
     assert liquidacion.total == pytest.approx(liquidacion.tabla["Monto"].sum())
     assert (liquidacion.tabla["Monto"] > 0).all()
+
+
+def test_sin_incluir_psicomey_quita_sus_ordenes(planilla_real):
+    psicomey = PSICOMEY_POR_ARCHIVO.get(planilla_real.name, 0)
+    liquidacion = liquidar(planilla_real, MONTOS)
+    assert liquidacion.excluidas_opcional == psicomey
+    assert len(liquidacion.tabla) == ORDENES_POR_ARCHIVO[planilla_real.name] - psicomey
+    assert "PSICOMEY" not in set(liquidacion.tabla["Prestación"].map(normalizar_prestacion))
+
+
+def test_incluir_psicomey_mantiene_todas_las_ordenes(planilla_real):
+    liquidacion = liquidar(planilla_real, MONTOS, incluir_opcional=True)
+    assert liquidacion.excluidas_opcional == 0
+    assert len(liquidacion.tabla) == ORDENES_POR_ARCHIVO[planilla_real.name]

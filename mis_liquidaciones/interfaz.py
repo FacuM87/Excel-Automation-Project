@@ -5,7 +5,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import config
 from .procesamiento import (
-    MESES, FormatoInvalido, guardar_liquidacion, liquidar,
+    MESES, PRESTACION_OPCIONAL, FormatoInvalido, guardar_liquidacion, liquidar,
     normalizar_prestacion, parsear_monto, periodo_mes_vencido,
 )
 
@@ -50,6 +50,9 @@ class VentanaPrincipal:
 
         self.lbl_archivo = tk.Label(frame_interior, text="Ningún archivo seleccionado", fg="blue")
         self.lbl_archivo.pack()
+
+        self.var_incluir_opcional = tk.BooleanVar(value=False)
+        tk.Checkbutton(frame_interior, text=f"Incluir {PRESTACION_OPCIONAL}", variable=self.var_incluir_opcional).pack(pady=(10, 0))
 
         frame_periodo = tk.LabelFrame(frame_interior, text="Período a liquidar")
         frame_periodo.pack(pady=10)
@@ -213,7 +216,7 @@ class VentanaPrincipal:
         self.guardar_montos()
 
         try:
-            liquidacion = liquidar(self.ruta_archivo_seleccionado, montos)
+            liquidacion = liquidar(self.ruta_archivo_seleccionado, montos, self.var_incluir_opcional.get())
             self.ruta_archivo_modificado = guardar_liquidacion(liquidacion, self.carpeta_guardado, mes, año)
         except FormatoInvalido as e:
             messagebox.showerror("Formato no reconocido", f"El archivo no tiene el formato esperado.\n{e}")
@@ -240,6 +243,11 @@ class VentanaPrincipal:
             )
 
         mensaje = f"Archivo guardado en: {self.ruta_archivo_modificado}"
+        if liquidacion.excluidas_opcional:
+            mensaje += (
+                f"\n\nNo se incluyeron {liquidacion.excluidas_opcional} orden(es) de {PRESTACION_OPCIONAL} "
+                f"(casilla \"Incluir {PRESTACION_OPCIONAL}\" desmarcada)."
+            )
         if advertencias:
             mensaje += "\n\nAtención:\n" + "\n\n".join(advertencias)
             messagebox.showwarning("Procesado con advertencias", mensaje)
