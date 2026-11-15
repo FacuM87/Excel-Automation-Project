@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS liquidaciones (
     incluye_opcional INTEGER NOT NULL,
     cantidad_ordenes INTEGER NOT NULL,
     total REAL NOT NULL,
+    enviada TEXT,
     UNIQUE (mes, año)
 );
 CREATE TABLE IF NOT EXISTS ordenes (
@@ -53,6 +54,7 @@ class LiquidacionRegistrada:
     incluye_opcional: bool
     cantidad_ordenes: int
     total: float
+    enviada: datetime = None
 
     @property
     def nombre(self):
@@ -67,6 +69,9 @@ def abrir(ruta):
     columnas = {fila[1] for fila in con.execute("PRAGMA table_info(ordenes)")}
     if "suceso" not in columnas:
         con.execute("ALTER TABLE ordenes ADD COLUMN suceso")
+    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(liquidaciones)")}
+    if "enviada" not in columnas:
+        con.execute("ALTER TABLE liquidaciones ADD COLUMN enviada TEXT")
     if con.execute("PRAGMA user_version").fetchone()[0] < 2:
         limpiar_psicomey_duplicados(con)
         con.execute(f"PRAGMA user_version = {VERSION_ESQUEMA}")
@@ -93,12 +98,14 @@ def limpiar_psicomey_duplicados(con):
 
 
 def _a_registro(fila):
-    id_, mes, año, generada, origen, generado, opcional, cantidad, total = fila
+    id_, mes, año, generada, origen, generado, opcional, cantidad, total, enviada = fila
     return LiquidacionRegistrada(
-        id_, mes, año, datetime.fromisoformat(generada), origen, generado, bool(opcional), cantidad, total)
+        id_, mes, año, datetime.fromisoformat(generada), origen, generado, bool(opcional), cantidad, total,
+        datetime.fromisoformat(enviada) if enviada else None)
 
 
-_COLUMNAS_LIQUIDACION = "id, mes, año, generada, archivo_origen, archivo_generado, incluye_opcional, cantidad_ordenes, total"
+_COLUMNAS_LIQUIDACION = (
+    "id, mes, año, generada, archivo_origen, archivo_generado, incluye_opcional, cantidad_ordenes, total, enviada")
 
 
 def buscar_liquidacion(con, mes, año):
@@ -187,3 +194,11 @@ def borrar(con, liquidacion_id):
     """Borra la liquidación y sus órdenes. Devuelve True si existía."""
     with con:
         return con.execute("DELETE FROM liquidaciones WHERE id = ?", (liquidacion_id,)).rowcount > 0
+
+
+def marcar_enviadas(con, periodos, fecha=None):
+    """Guarda la fecha de envío de los períodos (mes, año) registrados. Devuelve cuántos marcó."""
+    fecha = (fecha or datetime.now()).isoformat(sep=" ", timespec="seconds")
+    with con:
+        return sum(con.execute("UPDATE liquidaciones SET enviada = ? WHERE mes = ? AND año = ?",
+                               (fecha, mes, año)).rowcount for mes, año in periodos)

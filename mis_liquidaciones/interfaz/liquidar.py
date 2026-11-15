@@ -7,11 +7,13 @@ from tkinter import filedialog, messagebox
 import ttkbootstrap as tb
 
 from .. import base_datos
+from ..correo import PeriodoEnviado
 from ..procesamiento import (
     MESES, PSICOMEY, FormatoInvalido, detectar_periodos, formatear_monto, guardar_liquidacion,
     leer_planilla_origen, liquidar, normalizar_prestacion, ordenes_repetidas, periodo_mes_vencido,
     quitar_psicomey_duplicados,
 )
+from .dialogo_envio import iniciar_envio
 from .utiles import listar
 
 
@@ -20,6 +22,8 @@ class PestanaLiquidar:
         self.app = app
         self.ruta_archivo_seleccionado = None
         self.ruta_archivo_modificado = None
+        self.periodos_envio = []
+        self.dialogo_envio = None
         self.periodos_detectados = []
         self.prestaciones_archivo = set()
         self.ordenes_sin_fecha = 0
@@ -58,6 +62,9 @@ class PestanaLiquidar:
         self.btn_abrir_ubicacion = tb.Button(frame_botones, text="Abrir carpeta", bootstyle="info-outline",
                                              width=16, command=self.abrir_ubicacion, state=tk.DISABLED)
         self.btn_abrir_ubicacion.pack(side=tk.LEFT, padx=5, ipady=4)
+        self.btn_enviar = tb.Button(frame_botones, text="Enviar liquidación", bootstyle="primary", width=18,
+                                    command=self.enviar_liquidacion, state=tk.DISABLED)
+        self.btn_enviar.pack(side=tk.LEFT, padx=5, ipady=4)
 
         self.actualizar_aviso_montos()
 
@@ -204,6 +211,7 @@ class PestanaLiquidar:
                 return
 
             resultados = []
+            enviables = []
             for liquidacion, (mes, año), registrar_periodo in zip(liquidaciones, periodos, registrar):
                 try:
                     ruta = guardar_liquidacion(liquidacion, self.app.carpeta_guardado, mes, año)
@@ -211,21 +219,26 @@ class PestanaLiquidar:
                     messagebox.showerror("Error", f"No se pudo guardar la liquidación de {MESES[mes - 1]} {año}\n{e}")
                     return
                 estado = "no se registró en el historial"
+                registrada = False
                 if con and registrar_periodo:
                     try:
                         reemplazada = base_datos.guardar(
                             con, mes, año, liquidacion, self.ruta_archivo_seleccionado, ruta)
                         estado = "reemplazó la registrada en el historial" if reemplazada else "registrada en el historial"
+                        registrada = True
                     except Exception as e:
                         advertencias.append(
                             f"La liquidación de {MESES[mes - 1]} {año} se generó, pero no se pudo registrar "
                             f"en el historial.\n{e}")
                 resultados.append((liquidacion, ruta, estado))
+                enviables.append(PeriodoEnviado(mes, año, len(liquidacion.tabla), liquidacion.total, ruta, registrada))
 
         self.ruta_archivo_modificado = resultados[-1][1]
+        self.periodos_envio = enviables
         self.app.historial.actualizar()
         self._mostrar_resultado(resultados, varios_meses, advertencias)
         self.btn_abrir_ubicacion.config(state=tk.NORMAL)
+        self.btn_enviar.config(state=tk.NORMAL)
 
     def _confirmar_registro(self, con, liquidaciones, periodos, advertencias):
         """Pregunta por períodos ya registrados y órdenes repetidas. Devuelve, por período, si se registra
@@ -310,6 +323,10 @@ class PestanaLiquidar:
             messagebox.showwarning("Procesado con advertencias", mensaje)
         else:
             messagebox.showinfo("Éxito", mensaje)
+
+    def enviar_liquidacion(self):
+        if self.periodos_envio:
+            self.dialogo_envio = iniciar_envio(self.app, self.periodos_envio)
 
     def abrir_ubicacion(self):
         if self.ruta_archivo_modificado and os.path.exists(self.ruta_archivo_modificado):

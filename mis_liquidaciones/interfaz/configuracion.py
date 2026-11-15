@@ -6,6 +6,7 @@ from tkinter import filedialog, messagebox
 import ttkbootstrap as tb
 
 from .. import config
+from .dialogo_correo import DialogoCorreo
 from ..procesamiento import normalizar_prestacion, parsear_monto
 
 
@@ -13,6 +14,7 @@ class PestanaConfiguracion:
     def __init__(self, padre, app):
         self.app = app
         self.entries = {}
+        self.dialogo_correo = None
         self.marco = tb.Frame(padre, padding=15)
 
         frame_montos = tb.Labelframe(self.marco, text="Montos por prestación", padding=10)
@@ -40,6 +42,14 @@ class PestanaConfiguracion:
         self.lbl_carpeta.pack(side=tk.LEFT, fill="x", expand=True)
         tb.Button(frame_carpeta, text="Cambiar…", bootstyle="info-outline",
                   command=self.elegir_carpeta).pack(side=tk.RIGHT)
+
+        frame_correo = tb.Labelframe(self.marco, text="Correo para enviar las liquidaciones", padding=10)
+        frame_correo.pack(fill="x", pady=(0, 15))
+        self.lbl_correo = tb.Label(frame_correo, text="", wraplength=520, justify="left")
+        self.lbl_correo.pack(side=tk.LEFT, fill="x", expand=True)
+        tb.Button(frame_correo, text="Configurar correo…", bootstyle="info-outline",
+                  command=self.configurar_correo).pack(side=tk.RIGHT)
+        self.actualizar_resumen_correo()
 
         frame_tema = tb.Labelframe(self.marco, text="Tema", padding=10)
         frame_tema.pack(fill="x")
@@ -135,6 +145,28 @@ class PestanaConfiguracion:
             else:
                 montos[prestacion] = valor
         return montos, errores
+
+    # --- Correo --- #
+
+    def actualizar_resumen_correo(self):
+        datos = self.app.ajustes["correo"]
+        if not datos["cuenta"]:
+            texto = "Sin configurar: cargá la cuenta de Gmail para poder enviar las liquidaciones por mail."
+        else:
+            texto = f"Se envía desde {datos['cuenta']} a {datos['para'] or '(sin destinatarios)'}"
+            if datos["cc"]:
+                texto += f" · CC: {datos['cc']}"
+        self.lbl_correo.config(text=texto)
+
+    def configurar_correo(self, mostrar_pestaña=False):
+        if mostrar_pestaña:
+            self.app.cuaderno.select(self.marco)
+        self.dialogo_correo = DialogoCorreo(self.app.root, self.app.ajustes["correo"], self._guardar_correo)
+
+    def _guardar_correo(self, datos):
+        self.app.ajustes["correo"] = datos
+        self.app.guardar_ajustes()
+        self.actualizar_resumen_correo()
 
     # --- Carpetas --- #
 

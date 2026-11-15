@@ -1,6 +1,7 @@
 import json
 import sys
 
+from mis_liquidaciones.correo import CORREO_POR_DEFECTO
 from mis_liquidaciones.config import (
     AJUSTES_POR_DEFECTO, PRESTACIONES_POR_DEFECTO, cargar_ajustes, cargar_montos, carpeta_guardado, guardar_ajustes,
     guardar_montos, migrar_datos, obtener_directorio_app, obtener_directorio_datos, obtener_ruta_guardado,
@@ -61,7 +62,31 @@ def test_ajustes_sin_archivo_usa_los_valores_por_defecto(tmp_path):
 def test_guardar_y_cargar_ajustes(tmp_path):
     archivo = tmp_path / "ajustes.json"
     guardar_ajustes({"tema": "oscuro", "carpeta_guardado": str(tmp_path)}, archivo)
-    assert cargar_ajustes(archivo) == {"tema": "oscuro", "carpeta_guardado": str(tmp_path)}
+    ajustes = cargar_ajustes(archivo)
+    assert ajustes["tema"] == "oscuro"
+    assert ajustes["carpeta_guardado"] == str(tmp_path)
+    assert ajustes["correo"] == CORREO_POR_DEFECTO
+
+
+def test_ajustes_de_correo(tmp_path):
+    archivo = tmp_path / "ajustes.json"
+    escribir_json(archivo, {"correo": {"cuenta": "yo@gmail.com", "para": "a@x.com, b@y.com", "asunto": 5,
+                                       "otra": "x"}})
+    correo = cargar_ajustes(archivo)["correo"]
+    assert correo["cuenta"] == "yo@gmail.com"
+    assert correo["para"] == "a@x.com, b@y.com"
+    assert correo["asunto"] == CORREO_POR_DEFECTO["asunto"]
+    assert "otra" not in correo
+    escribir_json(archivo, {"correo": "no es un objeto"})
+    assert cargar_ajustes(archivo)["correo"] == CORREO_POR_DEFECTO
+
+
+def test_cargar_ajustes_no_modifica_los_valores_por_defecto(tmp_path):
+    archivo = tmp_path / "ajustes.json"
+    escribir_json(archivo, {"correo": {"cuenta": "yo@gmail.com"}})
+    cargar_ajustes(archivo)["correo"]["para"] = "cambiado@x.com"
+    assert CORREO_POR_DEFECTO["cuenta"] == "" and CORREO_POR_DEFECTO["para"] == ""
+    assert AJUSTES_POR_DEFECTO["correo"] == CORREO_POR_DEFECTO
 
 
 def test_ajustes_danados_o_invalidos(tmp_path):

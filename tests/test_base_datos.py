@@ -168,3 +168,33 @@ def test_borrar_quita_la_liquidacion_y_sus_ordenes(con, crear_planilla):
     assert [r.nombre for r in base_datos.listar_liquidaciones(con)] == ["Febrero 2026"]
     assert con.execute("SELECT COUNT(*) FROM ordenes").fetchone()[0] == 2
     assert not base_datos.borrar(con, marzo.id)
+
+
+def test_base_vieja_suma_la_columna_enviada(tmp_path):
+    ruta = tmp_path / "vieja.db"
+    vieja = sqlite3.connect(ruta)
+    vieja.executescript(ESQUEMA_V1)
+    vieja.execute("INSERT INTO liquidaciones VALUES (1, 3, 2026, '2026-04-01 10:00:00', NULL, NULL, 1, 0, 0)")
+    vieja.commit()
+    vieja.close()
+    con = base_datos.abrir(ruta)
+    assert base_datos.listar_liquidaciones(con)[0].enviada is None
+    assert base_datos.marcar_enviadas(con, [(3, 2026)], datetime(2026, 4, 3, 9, 30)) == 1
+    assert base_datos.buscar_liquidacion(con, 3, 2026).enviada == datetime(2026, 4, 3, 9, 30)
+    con.close()
+
+
+def test_marcar_enviadas(con, crear_planilla):
+    base_datos.guardar(con, 3, 2026, _liquidar(crear_planilla, [1, 2]))
+    base_datos.guardar(con, 4, 2026, _liquidar(crear_planilla, [3], fecha="01/04/2026", nombre="abril.xlsx"))
+    assert base_datos.buscar_liquidacion(con, 3, 2026).enviada is None
+    fecha = datetime(2026, 5, 2, 10, 0)
+    assert base_datos.marcar_enviadas(con, [(3, 2026), (4, 2026), (5, 2026)], fecha) == 2
+    assert [r.enviada for r in base_datos.listar_liquidaciones(con)] == [fecha, fecha]
+
+
+def test_reemplazar_una_liquidacion_borra_la_fecha_de_envio(con, crear_planilla):
+    base_datos.guardar(con, 3, 2026, _liquidar(crear_planilla, [1, 2]))
+    base_datos.marcar_enviadas(con, [(3, 2026)])
+    base_datos.guardar(con, 3, 2026, _liquidar(crear_planilla, [1, 2, 3]))
+    assert base_datos.buscar_liquidacion(con, 3, 2026).enviada is None

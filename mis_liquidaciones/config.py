@@ -4,6 +4,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from .correo import CORREO_POR_DEFECTO
 from .procesamiento import normalizar_prestacion
 
 VERSION = "2.0"
@@ -97,12 +98,12 @@ def guardar_montos(montos, archivo=ARCHIVO_MONTOS):
 
 ARCHIVO_AJUSTES = DIRECTORIO_DATOS / "ajustes.json"
 TEMAS = {"claro": "flatly", "oscuro": "darkly"}
-AJUSTES_POR_DEFECTO = {"tema": "claro", "carpeta_guardado": ""}
+AJUSTES_POR_DEFECTO = {"tema": "claro", "carpeta_guardado": "", "correo": dict(CORREO_POR_DEFECTO)}
 
 
 def cargar_ajustes(archivo=ARCHIVO_AJUSTES):
     """Lee ajustes.json; completa con los valores por defecto lo que falte o sea inválido."""
-    ajustes = dict(AJUSTES_POR_DEFECTO)
+    ajustes = dict(AJUSTES_POR_DEFECTO, correo=dict(CORREO_POR_DEFECTO))
     try:
         with open(archivo, "r", encoding="utf-8") as file:
             datos = json.load(file)
@@ -113,6 +114,11 @@ def cargar_ajustes(archivo=ARCHIVO_AJUSTES):
             ajustes["tema"] = datos["tema"]
         if isinstance(datos.get("carpeta_guardado"), str):
             ajustes["carpeta_guardado"] = datos["carpeta_guardado"]
+        correo = datos.get("correo")
+        if isinstance(correo, dict):
+            for clave in CORREO_POR_DEFECTO:
+                if isinstance(correo.get(clave), str):
+                    ajustes["correo"][clave] = correo[clave]
     return ajustes
 
 

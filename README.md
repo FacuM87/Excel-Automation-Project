@@ -1,11 +1,11 @@
 # MisLiquidaciones
 
-Aplicación de escritorio para Windows que arma la liquidación mensual de prestaciones a partir del Excel de órdenes recibido (`dgOrdenes.XLSX`).
+Aplicación de escritorio para Windows que arma la liquidación mensual de prestaciones a partir del Excel de órdenes recibido.
 
-- **Liquidar**: lee el archivo, aplica el monto de cada prestación y genera el Excel de liquidación con el total.
-- **Historial**: guarda cada liquidación en una base local y permite importar archivos de meses anteriores.
+- **Liquidar**: lee el archivo, aplica el monto de cada prestación y genera el Excel de liquidación con el total. Lo puede enviar por mail desde Gmail.
+- **Historial**: guarda cada liquidación en una base local, permite importar archivos de meses anteriores y enviar por mail los meses elegidos.
 - **Reportes**: totales mensuales y anuales por prestación, con gráficos y exportación a Excel.
-- **Configuración**: montos por prestación, carpeta de guardado y tema claro u oscuro.
+- **Configuración**: montos por prestación, carpeta de guardado, correo (cuenta, destinatarios y plantilla del mail) y tema claro u oscuro.
 
 ## Tecnologías
 

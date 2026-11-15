@@ -2,13 +2,16 @@ import os
 import tkinter as tk
 import tkinter.font as tkfont
 from contextlib import closing
+from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import pandas as pd
 import ttkbootstrap as tb
 
 from .. import base_datos, importacion
+from ..correo import PeriodoEnviado
 from ..procesamiento import formatear_monto
+from .dialogo_envio import iniciar_envio
 from .dialogo_importacion import DialogoImportacion
 from .utiles import crear_tabla
 
@@ -18,6 +21,7 @@ class PestanaHistorial:
         self.app = app
         self.liquidaciones = {}
         self.dialogo_importacion = None
+        self.dialogo_envio = None
 
         self.marco = tb.Frame(padre, padding=15)
         self.fuente_total = tkfont.nametofont("TkDefaultFont").copy()
@@ -33,12 +37,16 @@ class PestanaHistorial:
         self.btn_abrir_excel = tb.Button(barra, text="Abrir Excel generado", bootstyle="info-outline",
                                          command=self.abrir_excel, state=tk.DISABLED)
         self.btn_abrir_excel.pack(side=tk.RIGHT, padx=10)
+        self.btn_enviar = tb.Button(barra, text="Enviar", bootstyle="primary", command=self.enviar,
+                                    state=tk.DISABLED)
+        self.btn_enviar.pack(side=tk.RIGHT)
         self.lbl_estado = tb.Label(barra, text="")
         self.lbl_estado.pack(side=tk.LEFT, padx=15)
 
         marco_lista, self.tabla = crear_tabla(self.marco, (
             ("periodo", "Período", 130, "w"), ("ordenes", "Órdenes", 70, "e"), ("total", "Total", 110, "e"),
-            ("registrada", "Registrada", 120, "center"), ("origen", "Origen", 340, "w")), altura=7)
+            ("registrada", "Registrada", 100, "center"), ("enviada", "Enviada", 100, "center"),
+            ("origen", "Origen", 300, "w")), altura=7, selectmode="extended")
         marco_lista.pack(fill="both", expand=True)
         self.tabla.bind("<<TreeviewSelect>>", lambda _e: self.mostrar_detalle())
 
@@ -63,14 +71,17 @@ class PestanaHistorial:
     def _abrir_base(self):
         return closing(base_datos.abrir(self.app.archivo_base))
 
+    def seleccionadas(self):
+        return [self.liquidaciones[int(i)] for i in self.tabla.selection() if int(i) in self.liquidaciones]
+
     def seleccionada(self):
-        seleccion = self.tabla.selection()
-        return self.liquidaciones.get(int(seleccion[0])) if seleccion else None
+        """La liquidación elegida si hay exactamente una seleccionada."""
+        seleccion = self.seleccionadas()
+        return seleccion[0] if len(seleccion) == 1 else None
 
     def actualizar(self, seleccionar=None):
         """Recarga la lista desde la base. Mantiene la selección si sigue existiendo."""
-        anterior = self.seleccionada()
-        seleccionar = seleccionar or (anterior and (anterior.mes, anterior.año))
+        seleccionar = {seleccionar} if seleccionar else {(r.mes, r.año) for r in self.seleccionadas()}
         try:
             with self._abrir_base() as con:
                 registradas = base_datos.listar_liquidaciones(con)
@@ -88,9 +99,9 @@ class PestanaHistorial:
         for r in reversed(registradas):
             self.tabla.insert("", tk.END, iid=str(r.id), values=(
                 r.nombre, r.cantidad_ordenes, f"$ {formatear_monto(r.total)}", f"{r.generada:%d/%m/%Y}",
-                r.archivo_origen or ""))
-            if seleccionar == (r.mes, r.año):
-                self.tabla.selection_set(str(r.id))
+                f"{r.enviada:%d/%m/%Y}" if r.enviada else "", r.archivo_origen or ""))
+            if (r.mes, r.año) in seleccionar:
+                self.tabla.selection_add(str(r.id))
                 self.tabla.see(str(r.id))
         self.mostrar_detalle()
         if getattr(self.app, "reportes", None):
@@ -103,6 +114,7 @@ class PestanaHistorial:
         estado = tk.NORMAL if liquidacion else tk.DISABLED
         self.btn_borrar.config(state=estado)
         self.btn_abrir_excel.config(state=tk.NORMAL if liquidacion and liquidacion.archivo_generado else tk.DISABLED)
+        self.btn_enviar.config(state=tk.NORMAL if self.seleccionadas() else tk.DISABLED)
         if not liquidacion:
             return
 
@@ -137,6 +149,15 @@ class PestanaHistorial:
                 f"Puede haberse movido o borrado.")
         else:
             os.startfile(liquidacion.archivo_generado)
+
+    def enviar(self):
+        """Envía en un solo mail los Excel de los meses seleccionados."""
+        periodos = [
+            PeriodoEnviado(r.mes, r.año, r.cantidad_ordenes, r.total,
+                           Path(r.archivo_generado) if r.archivo_generado else None)
+            for r in sorted(self.seleccionadas(), key=lambda r: (r.año, r.mes))]
+        if periodos:
+            self.dialogo_envio = iniciar_envio(self.app, periodos)
 
     def borrar(self):
         liquidacion = self.seleccionada()
