@@ -3,7 +3,7 @@ import tkinter as tk
 import ttkbootstrap as tb
 from ttkbootstrap.scrolled import ScrolledText
 
-from ..procesamiento import MESES, PRESTACION_OPCIONAL, formatear_monto
+from ..procesamiento import MESES, PSICOMEY, formatear_monto
 from .interruptor import Interruptor
 from .utiles import crear_tabla, listar
 
@@ -11,9 +11,8 @@ from .utiles import crear_tabla, listar
 class DialogoImportacion:
     """Vista previa de la importación: un renglón por período, avisos y confirmación."""
 
-    def __init__(self, padre, analisis, incluir_opcional, al_confirmar):
+    def __init__(self, padre, analisis, al_confirmar):
         self.analisis = analisis
-        self.incluir_opcional = incluir_opcional
         self.al_confirmar = al_confirmar
 
         self.ventana = tb.Toplevel(title="Importar historial")
@@ -70,10 +69,9 @@ class DialogoImportacion:
             cantidad = sum(per.liquidacion.cantidad_sin_monto for per in self.analisis.periodos)
             avisos.append(f"• {cantidad} orden(es) quedan con monto 0 (prestación sin monto cargado): "
                           + ", ".join(p if p else "(vacío)" for p in sin_monto))
-        excluidas = sum(per.liquidacion.excluidas_opcional for per in self.analisis.periodos)
-        if excluidas:
-            avisos.append(f"• No se importan {excluidas} orden(es) de {PRESTACION_OPCIONAL} "
-                          f"(casilla \"Incluir {PRESTACION_OPCIONAL}\" desmarcada).")
+        duplicados = sum(per.liquidacion.psicomey_duplicados for per in self.analisis.periodos)
+        if duplicados:
+            avisos.append(f"• Se quitaron {duplicados} fila(s) de {PSICOMEY} que duplicaban otra orden.")
         if self.analisis.no_cumplidas:
             avisos.append(f"• Se excluyeron {self.analisis.no_cumplidas} orden(es) no cumplida(s).")
         for periodo in self.analisis.periodos:
@@ -89,7 +87,7 @@ class DialogoImportacion:
         return avisos
 
     def confirmar(self):
-        if self.al_confirmar(self.analisis, self.var_reemplazar.get(), self.incluir_opcional):
+        if self.al_confirmar(self.analisis, self.var_reemplazar.get()):
             self.ventana.destroy()
 
     def cancelar(self):

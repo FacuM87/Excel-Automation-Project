@@ -38,8 +38,7 @@ class PestanaHistorial:
 
         marco_lista, self.tabla = crear_tabla(self.marco, (
             ("periodo", "Período", 130, "w"), ("ordenes", "Órdenes", 70, "e"), ("total", "Total", 110, "e"),
-            ("registrada", "Registrada", 120, "center"), ("origen", "Origen", 260, "w"),
-            ("opcional", "PSICOMEY", 80, "center")), altura=7)
+            ("registrada", "Registrada", 120, "center"), ("origen", "Origen", 340, "w")), altura=7)
         marco_lista.pack(fill="both", expand=True)
         self.tabla.bind("<<TreeviewSelect>>", lambda _e: self.mostrar_detalle())
 
@@ -89,7 +88,7 @@ class PestanaHistorial:
         for r in reversed(registradas):
             self.tabla.insert("", tk.END, iid=str(r.id), values=(
                 r.nombre, r.cantidad_ordenes, f"$ {formatear_monto(r.total)}", f"{r.generada:%d/%m/%Y}",
-                r.archivo_origen or "", "Sí" if r.incluye_opcional else "No"))
+                r.archivo_origen or ""))
             if seleccionar == (r.mes, r.año):
                 self.tabla.selection_set(str(r.id))
                 self.tabla.see(str(r.id))
@@ -173,9 +172,8 @@ class PestanaHistorial:
                                  "Corregí los siguientes montos en Configuración:\n\n" + "\n".join(errores))
             return
         configuracion.guardar_montos()
-        incluir_opcional = self.app.liquidar.var_incluir_opcional.get()
 
-        analisis = importacion.analizar_archivos(rutas, montos, incluir_opcional)
+        analisis = importacion.analizar_archivos(rutas, montos)
         if not analisis.periodos:
             detalle = "\n".join(f"  • {nombre}: {error}" for nombre, error in analisis.errores)
             messagebox.showerror("Nada para importar", "No se encontraron órdenes para importar.\n\n" + detalle)
@@ -189,12 +187,12 @@ class PestanaHistorial:
             return
 
         self.dialogo_importacion = DialogoImportacion(
-            self.app.root, analisis, incluir_opcional, self._confirmar_importacion)
+            self.app.root, analisis, self._confirmar_importacion)
 
-    def _confirmar_importacion(self, analisis, reemplazar, incluir_opcional):
+    def _confirmar_importacion(self, analisis, reemplazar):
         try:
             with self._abrir_base() as con:
-                resultado = importacion.importar(con, analisis.periodos, reemplazar, incluir_opcional)
+                resultado = importacion.importar(con, analisis.periodos, reemplazar)
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo importar el historial.\n{e}")
             return False

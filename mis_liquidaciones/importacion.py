@@ -64,7 +64,7 @@ def _unir_sin_duplicar(partes):
     return unida.iloc[orden].reset_index(drop=True), descartadas
 
 
-def analizar_archivos(rutas, montos, incluir_opcional=False):
+def analizar_archivos(rutas, montos):
     """Lee los archivos y arma un período por mes. Los archivos que no se pueden leer quedan en errores."""
     partes = {}
     no_cumplidas = 0
@@ -90,7 +90,7 @@ def analizar_archivos(rutas, montos, incluir_opcional=False):
     for (mes, año) in sorted(partes, key=lambda p: (p[1], p[0])):
         archivos = [nombre for nombre, _ in partes[(mes, año)]]
         tabla, descartadas = _unir_sin_duplicar([df for _, df in partes[(mes, año)]])
-        liquidacion = aplicar_montos(tabla, montos, incluir_opcional)
+        liquidacion = aplicar_montos(tabla, montos)
         periodos.append(PeriodoImportable(mes, año, archivos, liquidacion, descartadas))
     return AnalisisImportacion(periodos, errores, sin_fecha, no_cumplidas)
 
@@ -105,7 +105,7 @@ def verificar_en_base(con, periodos):
                 con, periodo.liquidacion.tabla[COLUMNA_ORDEN], (periodo.mes, periodo.año))
 
 
-def importar(con, periodos, reemplazar=False, incluye_opcional=False):
+def importar(con, periodos, reemplazar=False):
     """Registra los períodos en la base, sin generar Excel. Los ya registrados se reemplazan o se saltean."""
     resultado = ResultadoImportacion()
     for periodo in periodos:
@@ -113,7 +113,6 @@ def importar(con, periodos, reemplazar=False, incluye_opcional=False):
             resultado.salteados.append(periodo.nombre)
             continue
         reemplazado = base_datos.guardar(
-            con, periodo.mes, periodo.año, periodo.liquidacion, ", ".join(periodo.archivos),
-            incluye_opcional=incluye_opcional)
+            con, periodo.mes, periodo.año, periodo.liquidacion, ", ".join(periodo.archivos))
         (resultado.reemplazados if reemplazado else resultado.registrados).append(periodo.nombre)
     return resultado

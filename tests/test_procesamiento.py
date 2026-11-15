@@ -55,7 +55,7 @@ def test_lee_encabezado_en_fila_2_sin_perder_la_primera_orden(crear_planilla):
     assert len(df) == 3
     assert df.loc[0, "Trabajador"] == "Trabajador 1"
     assert no_cumplidas == 0
-    assert list(df.columns) == ["Orden", "Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
+    assert list(df.columns) == ["Orden", "Fecha", "Profesional", "HC", "Trabajador", "Prestación", "Suceso"]
 
 
 def test_lee_planilla_sin_titulo(crear_planilla):
@@ -127,7 +127,7 @@ def test_liquidar_prestaciones_sin_monto(crear_planilla):
         fila(5, None),
         fila(6, " nueva "),
     ])
-    liquidacion = liquidar(ruta, {"EXPSE 1": 100.0}, incluir_opcional=True)
+    liquidacion = liquidar(ruta, {"EXPSE 1": 100.0})
     assert liquidacion.total == 100.0
     assert liquidacion.sin_monto == ["", "NUEVA", "PSICOMEY"]
     assert liquidacion.cantidad_sin_monto == 5
@@ -144,41 +144,78 @@ def planilla_con_psicomey(crear_planilla):
     ])
 
 
-def test_sin_incluir_opcional_quita_psicomey(crear_planilla):
+def test_psicomey_unicos_se_liquidan(crear_planilla):
     liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0, "PSICOMEY": 500.0})
-    assert liquidacion.excluidas_opcional == 2
-    assert list(liquidacion.tabla["Trabajador"]) == ["Trabajador 1", "Trabajador 3", "Trabajador 5"]
-    assert list(liquidacion.tabla["Monto"]) == [100.0, 200.0, 100.0]
-    assert liquidacion.total == 400.0
-    assert list(liquidacion.tabla.index) == [0, 1, 2]
-
-
-def test_sin_incluir_opcional_no_avisa_psicomey_sin_monto(crear_planilla):
-    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0})
-    assert liquidacion.sin_monto == []
-    assert liquidacion.cantidad_sin_monto == 0
-
-
-def test_incluir_opcional_liquida_psicomey(crear_planilla):
-    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0, "PSICOMEY": 500.0},
-                           incluir_opcional=True)
-    assert liquidacion.excluidas_opcional == 0
+    assert liquidacion.psicomey_duplicados == 0
     assert len(liquidacion.tabla) == 5
     assert liquidacion.total == 1400.0
 
 
-def test_incluir_opcional_sin_monto_avisa(crear_planilla):
-    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0}, incluir_opcional=True)
+def test_psicomey_sin_monto_avisa(crear_planilla):
+    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0})
     assert liquidacion.sin_monto == ["PSICOMEY"]
     assert liquidacion.cantidad_sin_monto == 2
 
 
-def test_guardar_sin_psicomey(crear_planilla, tmp_path):
-    liquidacion = liquidar(planilla_con_psicomey(crear_planilla), {"EXPSE 1": 100.0, "EXPSE 2": 200.0})
+def orden(numero, prestacion, hc=500, suceso=900, fecha="05/03/2026 10:15:30"):
+    """Fila con HC, suceso y fecha y hora elegidos, para armar duplicados."""
+    return [numero, fecha, "Profesional Prueba", hc, f"Trabajador {hc}", suceso, "Examen", prestacion, "Sí"]
+
+
+MONTOS_R3 = {"EXPSE 7": 700.0, "EXPSE 1": 100.0, "PSICOMEY": 50.0}
+
+
+@pytest.mark.parametrize("filas", [
+    [orden(2, "PSICOMEY"), orden(1, "EXPSE 7")],
+    [orden(1, "EXPSE 7"), orden(2, "psicomey")],
+], ids=["psicomey_arriba", "psicomey_abajo"])
+def test_psicomey_duplicado_se_quita(crear_planilla, filas):
+    liquidacion = liquidar(crear_planilla(filas), MONTOS_R3)
+    assert liquidacion.psicomey_duplicados == 1
+    assert list(liquidacion.tabla["Prestación"]) == ["EXPSE 7"]
+    assert liquidacion.total == 700.0
+
+
+@pytest.mark.parametrize("psicomey", [
+    orden(2, "PSICOMEY", hc=501),
+    orden(2, "PSICOMEY", suceso=901),
+    orden(2, "PSICOMEY", fecha="05/03/2026 10:15:31"),
+    orden(1, "PSICOMEY"),
+], ids=["otra_persona", "otro_suceso", "otra_hora", "mismo_numero_de_orden"])
+def test_psicomey_que_no_duplica_se_liquida(crear_planilla, psicomey):
+    liquidacion = liquidar(crear_planilla([orden(1, "EXPSE 7"), psicomey]), MONTOS_R3)
+    assert liquidacion.psicomey_duplicados == 0
+    assert liquidacion.total == 750.0
+
+
+def test_dos_psicomey_iguales_sin_otra_prestacion_no_se_quitan(crear_planilla):
+    liquidacion = liquidar(crear_planilla([orden(1, "PSICOMEY"), orden(2, "PSICOMEY")]), MONTOS_R3)
+    assert liquidacion.psicomey_duplicados == 0
+    assert len(liquidacion.tabla) == 2
+
+
+def test_psicomey_duplicado_de_cualquier_prestacion(crear_planilla):
+    liquidacion = liquidar(crear_planilla([orden(1, "EXPSE 1"), orden(2, "PSICOMEY")]), MONTOS_R3)
+    assert liquidacion.psicomey_duplicados == 1
+
+
+def test_sin_columna_suceso_compara_fecha_y_hc(crear_planilla):
+    encabezados = [e for e in ENCABEZADOS if e != "Suceso"]
+    filas = [[v for i, v in enumerate(f) if i != 5] for f in
+             (orden(1, "EXPSE 7"), orden(2, "PSICOMEY", suceso=901), orden(3, "PSICOMEY", hc=501))]
+    liquidacion = liquidar(crear_planilla(filas, encabezados=encabezados), MONTOS_R3)
+    assert liquidacion.psicomey_duplicados == 1
+    assert list(liquidacion.tabla["Orden"]) == [1, 3]
+
+
+def test_guardar_sin_psicomey_duplicado_ni_suceso(crear_planilla, tmp_path):
+    liquidacion = liquidar(crear_planilla([orden(1, "EXPSE 7"), orden(2, "PSICOMEY"), orden(3, "PSICOMEY", hc=501)]),
+                           MONTOS_R3)
     df = pd.read_excel(guardar_liquidacion(liquidacion, tmp_path, 3, 2026))
-    assert len(df) == 4
-    assert "PSICOMEY" not in set(df["Prestación"].astype(str).str.upper())
-    assert df.iloc[-1]["Monto"] == 400.0
+    assert list(df.columns) == ["Fecha", "Profesional", "HC", "Trabajador", "Prestación", "Monto"]
+    assert list(df["Prestación"][:2]) == ["EXPSE 7", "PSICOMEY"]
+    assert df.iloc[-1]["Fecha"] == "TOTAL"
+    assert df.iloc[-1]["Monto"] == 750.0
 
 
 def test_liquidar_informa_no_cumplidas(crear_planilla):
@@ -267,19 +304,17 @@ def test_liquidar_por_periodo(crear_planilla):
     montos = {"EXPSE 1": 100.0, "EXPSE 2": 200.0}
 
     marzo = liquidar(ruta, montos, periodo=(3, 2026))
-    assert list(marzo.tabla["Trabajador"]) == ["Trabajador 1"]
+    assert list(marzo.tabla["Trabajador"]) == ["Trabajador 1", "Trabajador 2"]
     assert marzo.total == 100.0
-    assert marzo.excluidas_opcional == 1
-    assert marzo.sin_monto == []
+    assert marzo.sin_monto == ["PSICOMEY"]
 
     abril = liquidar(ruta, montos, periodo=(4, 2026))
     assert list(abril.tabla["Trabajador"]) == ["Trabajador 3", "Trabajador 4"]
     assert abril.total == 200.0
-    assert abril.excluidas_opcional == 0
     assert abril.sin_monto == ["NUEVA"]
 
     assert len(liquidar(ruta, montos, periodo=(5, 2026)).tabla) == 0
-    assert len(liquidar(ruta, montos).tabla) == 4
+    assert len(liquidar(ruta, montos).tabla) == 5
 
 
 @pytest.mark.parametrize("entrada, esperado", [

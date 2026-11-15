@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime
 
 import pandas as pd
@@ -37,7 +38,7 @@ def test_guardar_y_leer(con, crear_planilla, tmp_path):
     generada = datetime(2026, 4, 10, 9, 30)
     reemplazada = base_datos.guardar(
         con, 3, 2026, liquidacion, tmp_path / "dgOrdenes.XLSX", tmp_path / "Liquidación Marzo 2026.xlsx",
-        incluye_opcional=True, generada=generada)
+        generada=generada)
 
     assert not reemplazada
     registrada = base_datos.buscar_liquidacion(con, 3, 2026)
@@ -45,7 +46,6 @@ def test_guardar_y_leer(con, crear_planilla, tmp_path):
     assert registrada.generada == generada
     assert registrada.archivo_origen == "dgOrdenes.XLSX"
     assert registrada.archivo_generado.endswith("Liquidación Marzo 2026.xlsx")
-    assert registrada.incluye_opcional
     assert registrada.cantidad_ordenes == 3
     assert registrada.total == 400.0
 
@@ -105,11 +105,50 @@ def test_guarda_sin_columna_orden(con, crear_planilla):
     assert len(ordenes) == 2
 
 
-def test_psicomey_incluido_se_guarda(con, crear_planilla):
+def test_psicomey_unico_se_guarda_con_suceso(con, crear_planilla):
     ruta = crear_planilla([fila(1, "EXPSE 1"), fila(2, "psicomey")])
-    base_datos.guardar(con, 3, 2026, liquidar(ruta, MONTOS, incluir_opcional=True), incluye_opcional=True)
+    base_datos.guardar(con, 3, 2026, liquidar(ruta, MONTOS))
     ordenes = base_datos.leer_ordenes(con, base_datos.buscar_liquidacion(con, 3, 2026).id)
     assert list(ordenes["prestacion"]) == ["EXPSE 1", "PSICOMEY"]
+    assert list(con.execute("SELECT suceso FROM ordenes")) == [("Suceso",), ("Suceso",)]
+
+
+ESQUEMA_V1 = """
+CREATE TABLE liquidaciones (
+    id INTEGER PRIMARY KEY, mes INTEGER NOT NULL, año INTEGER NOT NULL, generada TEXT NOT NULL,
+    archivo_origen TEXT, archivo_generado TEXT, incluye_opcional INTEGER NOT NULL,
+    cantidad_ordenes INTEGER NOT NULL, total REAL NOT NULL, UNIQUE (mes, año));
+CREATE TABLE ordenes (
+    id INTEGER PRIMARY KEY, liquidacion_id INTEGER NOT NULL REFERENCES liquidaciones(id) ON DELETE CASCADE,
+    orden, fecha TEXT, profesional TEXT, hc TEXT, trabajador TEXT, prestacion TEXT NOT NULL, monto REAL NOT NULL);
+PRAGMA user_version = 1;
+"""
+
+
+def test_base_vieja_se_limpia_al_abrir(tmp_path):
+    ruta = tmp_path / "vieja.db"
+    vieja = sqlite3.connect(ruta)
+    vieja.executescript(ESQUEMA_V1)
+    vieja.execute("INSERT INTO liquidaciones VALUES (1, 3, 2026, '2026-04-01 10:00:00', NULL, NULL, 1, 5, 1950)")
+    vieja.execute("INSERT INTO liquidaciones VALUES (2, 4, 2026, '2026-05-01 10:00:00', NULL, NULL, 1, 1, 50)")
+    hora = "2026-03-05 10:15:30.187000"
+    vieja.executemany("INSERT INTO ordenes (liquidacion_id, orden, fecha, hc, prestacion, monto) VALUES (?, ?, ?, ?, ?, ?)", [
+        (1, 1, hora, "500", "EXPSE 7", 700), (1, 2, hora, "500", "PSICOMEY", 50),
+        (1, 3, hora, "501", "PSICOMEY", 50), (1, 4, "2026-03-06 09:00:00", "502", "EXPSE 7", 700),
+        (1, 5, "2026-03-06 09:00:00", "502", "EXPSE 1", 450), (2, 6, hora, "500", "PSICOMEY", 50),
+    ])
+    vieja.commit()
+    vieja.close()
+
+    con = base_datos.abrir(ruta)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == base_datos.VERSION_ESQUEMA
+    marzo, abril = base_datos.listar_liquidaciones(con)
+    assert (marzo.cantidad_ordenes, marzo.total) == (4, 1900)
+    assert (abril.cantidad_ordenes, abril.total) == (1, 50)
+    assert list(base_datos.leer_ordenes(con, marzo.id)["orden"]) == [1, 3, 4, 5]
+    assert base_datos.limpiar_psicomey_duplicados(con) == 0
+    con.close()
+    base_datos.abrir(ruta).close()
 
 
 def test_resumen_por_prestacion(con, crear_planilla):

@@ -8,10 +8,10 @@ import ttkbootstrap as tb
 
 from .. import base_datos
 from ..procesamiento import (
-    MESES, PRESTACION_OPCIONAL, FormatoInvalido, detectar_periodos, formatear_monto, guardar_liquidacion,
+    MESES, PSICOMEY, FormatoInvalido, detectar_periodos, formatear_monto, guardar_liquidacion,
     leer_planilla_origen, liquidar, normalizar_prestacion, ordenes_repetidas, periodo_mes_vencido,
+    quitar_psicomey_duplicados,
 )
-from .interruptor import Interruptor
 from .utiles import listar
 
 
@@ -35,13 +35,8 @@ class PestanaLiquidar:
         self.lbl_archivo = tb.Label(frame_archivo, text="Ningún archivo seleccionado")
         self.lbl_archivo.pack(side=tk.LEFT, padx=15)
 
-        self.var_incluir_opcional = tk.BooleanVar(value=False)
-        self.interruptor_opcional = Interruptor(interior, f"Incluir {PRESTACION_OPCIONAL}", self.var_incluir_opcional,
-                                                command=self.actualizar_aviso_montos)
-        self.interruptor_opcional.pack(anchor="w", pady=15)
-
         frame_periodo = tb.Labelframe(interior, text="Período a liquidar", padding=15)
-        frame_periodo.pack(fill="x")
+        frame_periodo.pack(fill="x", pady=(15, 0))
         frame_selector = tb.Frame(frame_periodo)
         frame_selector.pack(anchor="w")
         self.cmb_mes = tb.Combobox(frame_selector, values=MESES, state="readonly", width=12)
@@ -96,7 +91,8 @@ class PestanaLiquidar:
             df, _ = leer_planilla_origen(self.ruta_archivo_seleccionado)
             self.periodos_detectados = detectar_periodos(df)
             self.ordenes_sin_fecha = len(df) - sum(p.ordenes for p in self.periodos_detectados)
-            self.prestaciones_archivo = set(df["Prestación"].fillna("").astype(str).map(normalizar_prestacion))
+            sin_duplicados, _ = quitar_psicomey_duplicados(df)
+            self.prestaciones_archivo = set(sin_duplicados["Prestación"].fillna("").astype(str).map(normalizar_prestacion))
         except Exception:
             self.periodos_detectados = []
             self.ordenes_sin_fecha = 0
@@ -122,8 +118,6 @@ class PestanaLiquidar:
         """Prestaciones sin monto válido: las del archivo elegido o, si no hay archivo, las configuradas."""
         montos, _ = self.app.configuracion.leer_y_validar_montos()
         candidatas = self.prestaciones_archivo if self.ruta_archivo_seleccionado else set(self.app.configuracion.entries)
-        if not self.var_incluir_opcional.get():
-            candidatas = candidatas - {PRESTACION_OPCIONAL}
         return sorted(p for p in candidatas if p not in montos)
 
     def actualizar_aviso_montos(self):
@@ -180,14 +174,13 @@ class PestanaLiquidar:
                     return
 
         self.app.configuracion.guardar_montos()
-        incluir_opcional = self.var_incluir_opcional.get()
         periodos = [(p.mes, p.año) for p in self.periodos_detectados] if varios_meses else [(mes, año)]
 
         try:
             if varios_meses:
-                liquidaciones = [liquidar(self.ruta_archivo_seleccionado, montos, incluir_opcional, p) for p in periodos]
+                liquidaciones = [liquidar(self.ruta_archivo_seleccionado, montos, p) for p in periodos]
             else:
-                liquidaciones = [liquidar(self.ruta_archivo_seleccionado, montos, incluir_opcional)]
+                liquidaciones = [liquidar(self.ruta_archivo_seleccionado, montos)]
         except FormatoInvalido as e:
             messagebox.showerror("Formato no reconocido", f"El archivo no tiene el formato esperado.\n{e}")
             return
@@ -221,7 +214,7 @@ class PestanaLiquidar:
                 if con and registrar_periodo:
                     try:
                         reemplazada = base_datos.guardar(
-                            con, mes, año, liquidacion, self.ruta_archivo_seleccionado, ruta, incluir_opcional)
+                            con, mes, año, liquidacion, self.ruta_archivo_seleccionado, ruta)
                         estado = "reemplazó la registrada en el historial" if reemplazada else "registrada en el historial"
                     except Exception as e:
                         advertencias.append(
@@ -288,7 +281,7 @@ class PestanaLiquidar:
         no_cumplidas = liquidaciones[0].no_cumplidas
         sin_monto = sorted({p for liq in liquidaciones for p in liq.sin_monto})
         cantidad_sin_monto = sum(liq.cantidad_sin_monto for liq in liquidaciones)
-        excluidas_opcional = sum(liq.excluidas_opcional for liq in liquidaciones)
+        psicomey_duplicados = sum(liq.psicomey_duplicados for liq in liquidaciones)
 
         advertencias = []
         if no_cumplidas:
@@ -310,11 +303,8 @@ class PestanaLiquidar:
             archivos = "\n".join(
                 f"  • {ruta.name} ({len(liq.tabla)} orden(es)): {estado}" for liq, ruta, estado in resultados)
             mensaje = f"Se generaron {len(resultados)} liquidaciones en {resultados[0][1].parent}:\n{archivos}"
-        if excluidas_opcional:
-            mensaje += (
-                f"\n\nNo se incluyeron {excluidas_opcional} orden(es) de {PRESTACION_OPCIONAL} "
-                f"(casilla \"Incluir {PRESTACION_OPCIONAL}\" desmarcada)."
-            )
+        if psicomey_duplicados:
+            mensaje += f"\n\nSe quitaron {psicomey_duplicados} fila(s) de {PSICOMEY} que duplicaban otra orden."
         if advertencias:
             mensaje += "\n\nAtención:\n" + "\n\n".join(advertencias)
             messagebox.showwarning("Procesado con advertencias", mensaje)

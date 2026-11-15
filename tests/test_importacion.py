@@ -109,14 +109,15 @@ def test_avisa_ordenes_de_otro_periodo(crear_planilla, base):
     assert abril.periodos[0].en_otros_periodos == {(3, 2026): [1]}
 
 
-@pytest.mark.parametrize("incluir, cantidad, excluidas", [(False, 1, 1), (True, 2, 0)])
-def test_psicomey_respeta_la_casilla(crear_planilla, base, incluir, cantidad, excluidas):
-    ruta = crear_planilla([fila(1, "EXPSE 1"), fila(2, "PSICOMEY")])
-    analisis = analizar_archivos([ruta], MONTOS, incluir_opcional=incluir)
-    assert analisis.periodos[0].liquidacion.excluidas_opcional == excluidas
-    importar(base, analisis.periodos, incluye_opcional=incluir)
-    registrada = base_datos.buscar_liquidacion(base, 3, 2026)
-    assert (registrada.cantidad_ordenes, registrada.incluye_opcional) == (cantidad, incluir)
+def test_psicomey_duplicado_entre_archivos_del_mismo_mes(crear_planilla, base):
+    expse = [1, "05/03/2026 10:15:30", "Profesional", 500, "Trabajador", 900, "Examen", "EXPSE 1", "Sí"]
+    psicomey = [2, "05/03/2026 10:15:30", "Profesional", 500, "Trabajador", 900, "Examen", "PSICOMEY", "Sí"]
+    unico = [3, "06/03/2026 11:00:00", "Profesional", 501, "Otro", 901, "Examen", "PSICOMEY", "Sí"]
+    rutas = [crear_planilla([expse], nombre="a.xlsx"), crear_planilla([psicomey, unico], nombre="b.xlsx")]
+    analisis = analizar_archivos(rutas, MONTOS)
+    assert analisis.periodos[0].liquidacion.psicomey_duplicados == 1
+    importar(base, analisis.periodos)
+    assert base_datos.buscar_liquidacion(base, 3, 2026).cantidad_ordenes == 2
 
 
 def test_no_cumplidas_se_cuentan_una_vez(crear_planilla):

@@ -140,8 +140,7 @@ class PestanaReportes:
             return
 
         r = self.reporte
-        resumen = f"{r.cantidad} orden(es) · total $ {formatear_monto(r.total)}"
-        self.lbl_estado.config(text="   ".join(t for t in (resumen, reportes.nota_opcional(r)) if t))
+        self.lbl_estado.config(text=f"{r.cantidad} orden(es) · total $ {formatear_monto(r.total)}")
         if mensual:
             self._llenar_prestaciones(self.tabla_mensual, r)
             self.grafico_mensual.mostrar((p or "(vacío)", t, c) for p, c, t in r.por_prestacion)

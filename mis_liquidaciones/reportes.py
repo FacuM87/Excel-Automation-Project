@@ -8,7 +8,7 @@ from openpyxl.chart.label import DataLabelList
 from openpyxl.descriptors import Typed
 from openpyxl.styles import Border, Font, PatternFill, Side
 
-from .procesamiento import MESES, PRESTACION_OPCIONAL
+from .procesamiento import MESES
 
 FORMATO_MONTO = '"$" #,##0.00'
 FORMATO_ABREVIADO = '"$" #,##0, "mil"'
@@ -22,7 +22,6 @@ class ReporteMensual:
     por_prestacion: list = field(default_factory=list)
     cantidad: int = 0
     total: float = 0.0
-    excluidas_opcional: int = 0
 
     @property
     def nombre(self):
@@ -37,7 +36,6 @@ class ReporteAnual:
     por_prestacion: list = field(default_factory=list)
     cantidad: int = 0
     total: float = 0.0
-    excluidas_opcional: int = 0
 
 
 def años_registrados(con):
@@ -47,43 +45,27 @@ def años_registrados(con):
 def _por_prestacion(con, condicion, parametros):
     return [(p, c, t) for p, c, t in con.execute(
         f"SELECT o.prestacion, COUNT(*), SUM(o.monto) FROM ordenes o JOIN liquidaciones l ON l.id = o.liquidacion_id "
-        f"WHERE {condicion} AND o.prestacion <> ? GROUP BY o.prestacion ORDER BY o.prestacion",
-        (*parametros, PRESTACION_OPCIONAL))]
-
-
-def _excluidas(con, condicion, parametros):
-    return con.execute(
-        f"SELECT COUNT(*) FROM ordenes o JOIN liquidaciones l ON l.id = o.liquidacion_id "
-        f"WHERE {condicion} AND o.prestacion = ?", (*parametros, PRESTACION_OPCIONAL)).fetchone()[0]
+        f"WHERE {condicion} GROUP BY o.prestacion ORDER BY o.prestacion", parametros)]
 
 
 def reporte_mensual(con, mes, año):
-    """Cantidad y total por prestación del período, sin PSICOMEY (R2). None si no está registrado."""
+    """Cantidad y total por prestación del período. None si no está registrado."""
     if not con.execute("SELECT 1 FROM liquidaciones WHERE mes = ? AND año = ?", (mes, año)).fetchone():
         return None
-    condicion, parametros = "l.mes = ? AND l.año = ?", (mes, año)
-    filas = _por_prestacion(con, condicion, parametros)
-    return ReporteMensual(mes, año, filas, sum(f[1] for f in filas), sum(f[2] for f in filas),
-                          _excluidas(con, condicion, parametros))
+    filas = _por_prestacion(con, "l.mes = ? AND l.año = ?", (mes, año))
+    return ReporteMensual(mes, año, filas, sum(f[1] for f in filas), sum(f[2] for f in filas))
 
 
 def reporte_anual(con, año):
-    """Totales por mes y por prestación del año, sin PSICOMEY (R2)."""
+    """Totales por mes y por prestación del año."""
     registrados = {mes: (0, 0.0) for (mes,) in con.execute("SELECT mes FROM liquidaciones WHERE año = ?", (año,))}
     for mes, cantidad, total in con.execute(
             "SELECT l.mes, COUNT(*), SUM(o.monto) FROM ordenes o JOIN liquidaciones l ON l.id = o.liquidacion_id "
-            "WHERE l.año = ? AND o.prestacion <> ? GROUP BY l.mes", (año, PRESTACION_OPCIONAL)):
+            "WHERE l.año = ? GROUP BY l.mes", (año,)):
         registrados[mes] = (cantidad, total)
     por_mes = [(mes, *registrados.get(mes, (None, None))) for mes in range(1, 13)]
     filas = _por_prestacion(con, "l.año = ?", (año,))
-    return ReporteAnual(año, por_mes, filas, sum(f[1] for f in filas), sum(f[2] for f in filas),
-                        _excluidas(con, "l.año = ?", (año,)))
-
-
-def nota_opcional(reporte):
-    if not reporte.excluidas_opcional:
-        return ""
-    return f"No incluye {reporte.excluidas_opcional} orden(es) de {PRESTACION_OPCIONAL}."
+    return ReporteAnual(año, por_mes, filas, sum(f[1] for f in filas), sum(f[2] for f in filas))
 
 
 # --- Exportación a Excel --- #
@@ -126,14 +108,12 @@ def _escribir_tabla(hoja, fila, subtitulo, encabezados, filas, fila_total):
     return encabezado, fila + 2
 
 
-def _nuevo_libro(titulo, reporte):
+def _nuevo_libro(titulo):
     libro = Workbook()
     hoja = libro.active
     hoja.title = "Reporte"
     hoja.cell(1, 1, titulo).font = Font(bold=True, size=14)
     hoja.cell(2, 1, f"Generado el {datetime.now():%d/%m/%Y}")
-    if nota_opcional(reporte):
-        hoja.cell(3, 1, nota_opcional(reporte)).font = Font(italic=True)
     for letra, ancho in (("A", 22), ("B", 12), ("C", 18)):
         hoja.column_dimensions[letra].width = ancho
     return libro, hoja
@@ -169,7 +149,7 @@ def _grafico(hoja, encabezado, cantidad_filas, titulo, horizontal, alto):
 
 
 def exportar_mensual(reporte, ruta):
-    libro, hoja = _nuevo_libro(f"Reporte mensual — {reporte.nombre}", reporte)
+    libro, hoja = _nuevo_libro(f"Reporte mensual — {reporte.nombre}")
     encabezado, _ = _escribir_tabla(hoja, 5, None, ("Prestación", "Cantidad", "Total"), reporte.por_prestacion,
                                     ("TOTAL", reporte.cantidad, reporte.total))
     filas = len(reporte.por_prestacion)
@@ -178,7 +158,7 @@ def exportar_mensual(reporte, ruta):
 
 
 def exportar_anual(reporte, ruta):
-    libro, hoja = _nuevo_libro(f"Reporte anual {reporte.año}", reporte)
+    libro, hoja = _nuevo_libro(f"Reporte anual {reporte.año}")
     filas_mes = [(MESES[mes - 1], cantidad, total) for mes, cantidad, total in reporte.por_mes]
     encabezado_mes, fila = _escribir_tabla(hoja, 5, "Por mes", ("Mes", "Órdenes", "Total"), filas_mes,
                                            ("TOTAL", reporte.cantidad, reporte.total))

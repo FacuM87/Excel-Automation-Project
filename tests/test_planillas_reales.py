@@ -64,26 +64,20 @@ def test_prestaciones_conocidas(planilla_real):
     assert set(df["Prestación"].map(normalizar_prestacion)) <= set(PRESTACIONES_POR_DEFECTO)
 
 
-@pytest.mark.parametrize("incluir_opcional", [False, True], ids=["sin_psicomey", "con_psicomey"])
-def test_total_es_la_suma(planilla_real, incluir_opcional):
-    liquidacion = liquidar(planilla_real, MONTOS, incluir_opcional)
+def test_total_es_la_suma(planilla_real):
+    liquidacion = liquidar(planilla_real, MONTOS)
     assert liquidacion.cantidad_sin_monto == 0
     assert liquidacion.total == pytest.approx(liquidacion.tabla["Monto"].sum())
     assert (liquidacion.tabla["Monto"] > 0).all()
 
 
-def test_sin_incluir_psicomey_quita_sus_ordenes(planilla_real):
+def test_quita_los_psicomey_duplicados(planilla_real):
+    """En las muestras todos los PSICOMEY duplican un EXPSE 7 (R3)."""
     psicomey = PSICOMEY_POR_ARCHIVO.get(planilla_real.name, 0)
     liquidacion = liquidar(planilla_real, MONTOS)
-    assert liquidacion.excluidas_opcional == psicomey
+    assert liquidacion.psicomey_duplicados == psicomey
     assert len(liquidacion.tabla) == ORDENES_POR_ARCHIVO[planilla_real.name] - psicomey
     assert "PSICOMEY" not in set(liquidacion.tabla["Prestación"].map(normalizar_prestacion))
-
-
-def test_incluir_psicomey_mantiene_todas_las_ordenes(planilla_real):
-    liquidacion = liquidar(planilla_real, MONTOS, incluir_opcional=True)
-    assert liquidacion.excluidas_opcional == 0
-    assert len(liquidacion.tabla) == ORDENES_POR_ARCHIVO[planilla_real.name]
 
 
 def test_detecta_el_periodo(planilla_real):
@@ -95,8 +89,8 @@ def test_detecta_el_periodo(planilla_real):
 
 
 def test_liquidar_por_periodo_detectado_da_lo_mismo(planilla_real):
-    completa = liquidar(planilla_real, MONTOS, incluir_opcional=True)
-    por_periodo = liquidar(planilla_real, MONTOS, incluir_opcional=True, periodo=PERIODO_POR_ARCHIVO[planilla_real.name])
+    completa = liquidar(planilla_real, MONTOS)
+    por_periodo = liquidar(planilla_real, MONTOS, periodo=PERIODO_POR_ARCHIVO[planilla_real.name])
     assert completa.tabla.equals(por_periodo.tabla)
 
 
@@ -114,14 +108,16 @@ def test_sin_ordenes_repetidas_en_el_archivo(planilla_real):
 
 
 def test_guardar_en_la_base(planilla_real, tmp_path):
-    liquidacion = liquidar(planilla_real, MONTOS, incluir_opcional=True)
+    liquidacion = liquidar(planilla_real, MONTOS)
     mes, año = PERIODO_POR_ARCHIVO[planilla_real.name]
     with base_datos.abrir(tmp_path / "base.db") as con:
         base_datos.guardar(con, mes, año, liquidacion, planilla_real)
         registrada = base_datos.buscar_liquidacion(con, mes, año)
         ordenes = base_datos.leer_ordenes(con, registrada.id)
     con.close()
-    assert registrada.cantidad_ordenes == ORDENES_POR_ARCHIVO[planilla_real.name]
+    psicomey = PSICOMEY_POR_ARCHIVO.get(planilla_real.name, 0)
+    assert registrada.cantidad_ordenes == ORDENES_POR_ARCHIVO[planilla_real.name] - psicomey
+    assert ordenes["suceso"].notna().all()
     assert registrada.total == pytest.approx(liquidacion.total)
     assert ordenes["monto"].sum() == pytest.approx(liquidacion.total)
     assert ordenes["fecha"].notna().all()
@@ -129,15 +125,15 @@ def test_guardar_en_la_base(planilla_real, tmp_path):
 
 
 def test_caso_h6_reemplaza_marzo_sin_duplicar(tmp_path):
-    parcial = liquidar(_real("dgOrdenes.XLSX"), MONTOS, incluir_opcional=True)
-    completa = liquidar(_real("dgOrdenes (1).XLSX"), MONTOS, incluir_opcional=True)
+    parcial = liquidar(_real("dgOrdenes.XLSX"), MONTOS)
+    completa = liquidar(_real("dgOrdenes (1).XLSX"), MONTOS)
     con = base_datos.abrir(tmp_path / "base.db")
     base_datos.guardar(con, 3, 2026, parcial)
     assert base_datos.buscar_ordenes_registradas(con, completa.tabla["Orden"], excluir_periodo=(3, 2026)) == {}
     assert len(base_datos.buscar_ordenes_registradas(con, completa.tabla["Orden"])[(3, 2026)]) == 40
     assert base_datos.guardar(con, 3, 2026, completa)
-    assert base_datos.buscar_liquidacion(con, 3, 2026).cantidad_ordenes == 143
-    assert con.execute("SELECT COUNT(*) FROM ordenes").fetchone()[0] == 143
+    assert base_datos.buscar_liquidacion(con, 3, 2026).cantidad_ordenes == 142
+    assert con.execute("SELECT COUNT(*) FROM ordenes").fetchone()[0] == 142
     con.close()
 
 
@@ -146,7 +142,7 @@ def test_archivos_numerados_sin_duplicados_entre_si(tmp_path):
     for nombre in sorted(ORDENES_POR_ARCHIVO):
         if nombre == "dgOrdenes.XLSX":
             continue
-        liquidacion = liquidar(_real(nombre), MONTOS, incluir_opcional=True)
+        liquidacion = liquidar(_real(nombre), MONTOS)
         mes, año = PERIODO_POR_ARCHIVO[nombre]
         assert base_datos.buscar_ordenes_registradas(con, liquidacion.tabla["Orden"], (mes, año)) == {}
         base_datos.guardar(con, mes, año, liquidacion)
@@ -154,16 +150,17 @@ def test_archivos_numerados_sin_duplicados_entre_si(tmp_path):
     con.close()
 
 
-@pytest.mark.parametrize("incluir_opcional, marzo", [(False, 142), (True, 143)])
-def test_importar_todo_el_historial(tmp_path, incluir_opcional, marzo):
+def test_importar_todo_el_historial(tmp_path):
     rutas = [_real(nombre) for nombre in ORDENES_POR_ARCHIVO]
-    analisis = importacion.analizar_archivos(rutas, MONTOS, incluir_opcional)
+    analisis = importacion.analizar_archivos(rutas, MONTOS)
     assert analisis.errores == []
     assert [(p.mes, p.año) for p in analisis.periodos] == [(m, 2026) for m in range(3, 10)]
     assert analisis.periodos[0].duplicadas_descartadas == 40
     con = base_datos.abrir(tmp_path / "base.db")
-    importacion.importar(con, analisis.periodos, incluye_opcional=incluir_opcional)
-    assert base_datos.buscar_liquidacion(con, 3, 2026).cantidad_ordenes == marzo
+    assert sum(p.liquidacion.psicomey_duplicados for p in analisis.periodos) == 6
+    importacion.importar(con, analisis.periodos)
+    assert base_datos.buscar_liquidacion(con, 3, 2026).cantidad_ordenes == 142
+    assert con.execute("SELECT COUNT(*) FROM ordenes WHERE prestacion = 'PSICOMEY'").fetchone()[0] == 0
     total, distintas = con.execute("SELECT COUNT(*), COUNT(DISTINCT orden) FROM ordenes").fetchone()
     assert total == distintas
     assert len(base_datos.listar_liquidaciones(con)) == 7

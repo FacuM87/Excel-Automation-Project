@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from .procesamiento import COLUMNA_ORDEN, MESES, convertir_fechas, normalizar_orden, normalizar_prestacion
+from .procesamiento import (
+    COLUMNA_ORDEN, COLUMNA_SUCESO, MESES, PSICOMEY, convertir_fechas, normalizar_orden, normalizar_prestacion,
+)
 
-VERSION_ESQUEMA = 1
+VERSION_ESQUEMA = 2
 LOTE_CONSULTA = 500
 
 ESQUEMA = """
@@ -32,7 +34,8 @@ CREATE TABLE IF NOT EXISTS ordenes (
     hc TEXT,
     trabajador TEXT,
     prestacion TEXT NOT NULL,
-    monto REAL NOT NULL
+    monto REAL NOT NULL,
+    suceso
 );
 CREATE INDEX IF NOT EXISTS idx_ordenes_orden ON ordenes(orden);
 CREATE INDEX IF NOT EXISTS idx_ordenes_liquidacion ON ordenes(liquidacion_id);
@@ -61,9 +64,32 @@ def abrir(ruta):
     con = sqlite3.connect(Path(ruta))
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript(ESQUEMA)
-    if con.execute("PRAGMA user_version").fetchone()[0] == 0:
+    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(ordenes)")}
+    if "suceso" not in columnas:
+        con.execute("ALTER TABLE ordenes ADD COLUMN suceso")
+    if con.execute("PRAGMA user_version").fetchone()[0] < 2:
+        limpiar_psicomey_duplicados(con)
         con.execute(f"PRAGMA user_version = {VERSION_ESQUEMA}")
     return con
+
+
+def limpiar_psicomey_duplicados(con):
+    """Borra los PSICOMEY guardados que duplican otra orden de la misma liquidación (misma fecha y hora, HC y
+    suceso si está guardado) y recalcula cantidad y total. Devuelve cuántas órdenes borró."""
+    with con:
+        borradas = con.execute(
+            "DELETE FROM ordenes WHERE prestacion = ? AND fecha IS NOT NULL AND hc IS NOT NULL AND EXISTS ("
+            "SELECT 1 FROM ordenes x WHERE x.liquidacion_id = ordenes.liquidacion_id AND x.prestacion <> ? "
+            "AND x.fecha = ordenes.fecha AND x.hc = ordenes.hc "
+            "AND (x.suceso IS NULL OR ordenes.suceso IS NULL OR x.suceso = ordenes.suceso) "
+            "AND (x.orden IS NULL OR ordenes.orden IS NULL OR x.orden <> ordenes.orden))",
+            (PSICOMEY, PSICOMEY)).rowcount
+        if borradas:
+            con.execute(
+                "UPDATE liquidaciones SET "
+                "cantidad_ordenes = (SELECT COUNT(*) FROM ordenes o WHERE o.liquidacion_id = liquidaciones.id), "
+                "total = (SELECT COALESCE(SUM(monto), 0) FROM ordenes o WHERE o.liquidacion_id = liquidaciones.id)")
+    return borradas
 
 
 def _a_registro(fila):
@@ -110,12 +136,12 @@ def _texto(valor):
     return str(valor).strip()
 
 
-def guardar(con, mes, año, liquidacion, archivo_origen=None, archivo_generado=None, incluye_opcional=False,
-            generada=None):
+def guardar(con, mes, año, liquidacion, archivo_origen=None, archivo_generado=None, generada=None):
     """Registra la liquidación y sus órdenes. Si el período ya existía, lo reemplaza. Devuelve True si reemplazó."""
     tabla = liquidacion.tabla
     fechas = convertir_fechas(tabla["Fecha"])
     numeros = tabla[COLUMNA_ORDEN] if COLUMNA_ORDEN in tabla.columns else [None] * len(tabla)
+    sucesos = tabla[COLUMNA_SUCESO] if COLUMNA_SUCESO in tabla.columns else [None] * len(tabla)
     generada = generada or datetime.now()
 
     with con:
@@ -126,26 +152,27 @@ def guardar(con, mes, año, liquidacion, archivo_origen=None, archivo_generado=N
             (mes, año, generada.isoformat(sep=" ", timespec="seconds"),
              Path(archivo_origen).name if archivo_origen else None,
              str(archivo_generado) if archivo_generado else None,
-             int(bool(incluye_opcional)), len(tabla), float(liquidacion.total)))
+             1, len(tabla), float(liquidacion.total)))
         liquidacion_id = cursor.lastrowid
         con.executemany(
-            "INSERT INTO ordenes (liquidacion_id, orden, fecha, profesional, hc, trabajador, prestacion, monto) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ordenes (liquidacion_id, orden, fecha, profesional, hc, trabajador, prestacion, monto, "
+            "suceso) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (liquidacion_id, normalizar_orden(numero),
                  None if pd.isna(fecha) else fecha.isoformat(sep=" "),
                  _texto(profesional), _texto(hc), _texto(trabajador),
-                 normalizar_prestacion("" if pd.isna(prestacion) else prestacion), float(monto))
-                for numero, fecha, profesional, hc, trabajador, prestacion, monto in zip(
+                 normalizar_prestacion("" if pd.isna(prestacion) else prestacion), float(monto),
+                 normalizar_orden(suceso))
+                for numero, fecha, profesional, hc, trabajador, prestacion, monto, suceso in zip(
                     numeros, fechas, tabla["Profesional"], tabla["HC"], tabla["Trabajador"],
-                    tabla["Prestación"], tabla["Monto"])
+                    tabla["Prestación"], tabla["Monto"], sucesos)
             ])
     return reemplazada
 
 
 def leer_ordenes(con, liquidacion_id):
     return pd.read_sql_query(
-        "SELECT orden, fecha, profesional, hc, trabajador, prestacion, monto FROM ordenes "
+        "SELECT orden, fecha, profesional, hc, trabajador, prestacion, monto, suceso FROM ordenes "
         "WHERE liquidacion_id = ? ORDER BY id", con, params=(liquidacion_id,))
 
 

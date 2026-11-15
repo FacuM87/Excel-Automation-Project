@@ -12,8 +12,9 @@ MESES = [
 
 COLUMNAS_SALIDA = ["Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
 COLUMNA_ORDEN = "Orden"
+COLUMNA_SUCESO = "Suceso"
 FILAS_BUSQUEDA_ENCABEZADO = 10
-PRESTACION_OPCIONAL = "PSICOMEY"
+PSICOMEY = "PSICOMEY"
 
 
 class FormatoInvalido(Exception):
@@ -28,7 +29,7 @@ class Liquidacion:
     no_cumplidas: int = 0
     sin_monto: list = field(default_factory=list)
     cantidad_sin_monto: int = 0
-    excluidas_opcional: int = 0
+    psicomey_duplicados: int = 0
 
     @property
     def tiene_numero_orden(self):
@@ -123,11 +124,15 @@ def leer_planilla_origen(ruta):
         no_cumplidas = int((~es_cumplida).sum())
         df = df[es_cumplida]
 
-    columnas = COLUMNAS_SALIDA
+    columnas = list(COLUMNAS_SALIDA)
+    for columna in (COLUMNA_ORDEN, COLUMNA_SUCESO):
+        if columna in df.columns:
+            valores = pd.Series([normalizar_orden(v) for v in df[columna]], index=df.index, dtype=object)
+            df = df.assign(**{columna: valores})
     if COLUMNA_ORDEN in df.columns:
-        numeros = pd.Series([normalizar_orden(v) for v in df[COLUMNA_ORDEN]], index=df.index, dtype=object)
-        df = df.assign(**{COLUMNA_ORDEN: numeros})
-        columnas = [COLUMNA_ORDEN] + COLUMNAS_SALIDA
+        columnas.insert(0, COLUMNA_ORDEN)
+    if COLUMNA_SUCESO in df.columns:
+        columnas.append(COLUMNA_SUCESO)
     return df[columnas].reset_index(drop=True), no_cumplidas
 
 
@@ -145,9 +150,37 @@ def detectar_periodos(df):
     return [PeriodoDetectado(int(mes), int(año), int(n)) for (año, mes), n in conteo.items()]
 
 
-def liquidar(ruta, montos, incluir_opcional=False, periodo=None):
+def quitar_psicomey_duplicados(df):
+    """Quita las filas de PSICOMEY que duplican otra orden: otra prestación con la misma fecha y hora, HC y
+    Suceso (si la columna existe) y distinto número de orden (R3). Devuelve (tabla, cantidad quitada)."""
+    df = df.reset_index(drop=True)
+    es_psicomey = df["Prestación"].fillna("").astype(str).map(normalizar_prestacion) == PSICOMEY
+    if not es_psicomey.any():
+        return df, 0
+    fechas = convertir_fechas(df["Fecha"])
+    hc = [normalizar_orden(v) for v in df["HC"]]
+    suceso = list(df[COLUMNA_SUCESO]) if COLUMNA_SUCESO in df.columns else [None] * len(df)
+    orden = list(df[COLUMNA_ORDEN]) if COLUMNA_ORDEN in df.columns else [None] * len(df)
+
+    def clave(i):
+        if pd.isna(fechas[i]) or hc[i] is None:
+            return None
+        return fechas[i], hc[i], suceso[i]
+
+    otras = {}
+    for i in df.index[~es_psicomey]:
+        if clave(i) is not None:
+            otras.setdefault(clave(i), []).append(orden[i])
+    duplicada = [
+        bool(es_psicomey[i]) and clave(i) in otras and any(o is None or o != orden[i] for o in otras[clave(i)])
+        for i in df.index
+    ]
+    mascara = pd.Series(duplicada, index=df.index)
+    return df[~mascara].reset_index(drop=True), int(mascara.sum())
+
+
+def liquidar(ruta, montos, periodo=None):
     """Lee la planilla y aplica los montos ({prestación: número}). Las prestaciones sin monto quedan en 0.
-    Si incluir_opcional es False, se quitan las filas de PRESTACION_OPCIONAL.
     Si se indica periodo (mes, año), solo se liquidan las órdenes de ese mes."""
     df, no_cumplidas = leer_planilla_origen(ruta)
 
@@ -156,19 +189,13 @@ def liquidar(ruta, montos, incluir_opcional=False, periodo=None):
         fechas = convertir_fechas(df["Fecha"])
         df = df[(fechas.dt.month == mes) & (fechas.dt.year == año)].reset_index(drop=True)
 
-    return aplicar_montos(df, montos, incluir_opcional, no_cumplidas)
+    return aplicar_montos(df, montos, no_cumplidas)
 
 
-def aplicar_montos(df, montos, incluir_opcional=False, no_cumplidas=0):
-    """Liquida una tabla ya leída: quita PRESTACION_OPCIONAL si corresponde y agrega la columna Monto."""
-    df = df.reset_index(drop=True)
+def aplicar_montos(df, montos, no_cumplidas=0):
+    """Liquida una tabla ya leída: quita los PSICOMEY duplicados y agrega la columna Monto."""
+    df, psicomey_duplicados = quitar_psicomey_duplicados(df)
     normalizadas = df["Prestación"].fillna("").astype(str).map(normalizar_prestacion)
-    excluidas_opcional = 0
-    if not incluir_opcional:
-        es_opcional = normalizadas == PRESTACION_OPCIONAL
-        excluidas_opcional = int(es_opcional.sum())
-        df = df[~es_opcional].reset_index(drop=True)
-        normalizadas = normalizadas[~es_opcional].reset_index(drop=True)
 
     montos_normalizados = {normalizar_prestacion(k): v for k, v in montos.items()}
     df = df.copy()
@@ -183,7 +210,7 @@ def aplicar_montos(df, montos, incluir_opcional=False, no_cumplidas=0):
         no_cumplidas=no_cumplidas,
         sin_monto=sorted(set(normalizadas[mascara_sin_monto])),
         cantidad_sin_monto=int(mascara_sin_monto.sum()),
-        excluidas_opcional=excluidas_opcional,
+        psicomey_duplicados=psicomey_duplicados,
     )
 
 
@@ -201,7 +228,7 @@ def obtener_nombre_archivo_unico(carpeta, mes, año):
 
 def guardar_liquidacion(liquidacion, carpeta, mes, año):
     """Guarda la liquidación con la fila TOTAL y devuelve la ruta del archivo generado."""
-    df = liquidacion.tabla.drop(columns=COLUMNA_ORDEN, errors="ignore")
+    df = liquidacion.tabla.drop(columns=[COLUMNA_ORDEN, COLUMNA_SUCESO], errors="ignore")
     df.loc[len(df)] = ["TOTAL", "", "", "", "", liquidacion.total]
     ruta = obtener_nombre_archivo_unico(carpeta, mes, año)
     df.to_excel(ruta, index=False, header=True)

@@ -5,6 +5,7 @@ docs/
 expse_montos.json
 prestaciones.json
 __pycache__/
+.pytest_cache/
 
 # Datos personales: Excel de muestra recibidos y liquidaciones generadas
 docs/**/*.xls
