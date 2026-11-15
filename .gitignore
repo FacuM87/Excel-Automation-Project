@@ -1,5 +1,13 @@
 venv/
 dist/
 build/
-*.ico
-*.spec
+docs/
+expse_montos.json
+__pycache__/
+
+# Datos personales: Excel de muestra recibidos y liquidaciones generadas
+docs/**/*.xls
+docs/**/*.xlsx
+docs/**/*.XLS
+docs/**/*.XLSX
+Liquidaci*.xlsx
