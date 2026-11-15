@@ -32,7 +32,7 @@ def obtener_ruta_guardado():
 
 ruta_guardado = obtener_ruta_guardado()
 archivo_json = obtener_directorio_app() / "expse_montos.json"
-archivo_json_anterior = Path("expse_montos.json")  # ubicación usada por versiones anteriores
+archivo_json_anterior = Path("expse_montos.json") 
 
 expse_montos = {"EXPSE 1": "", "EXPSE 2": "", "EXPSE 4": "", "EXPSE 6": "", "EXPSE 7": ""}
 
@@ -156,8 +156,6 @@ def procesar_excel():
             df = df.iloc[:, [1, 2, 3, 4, 7]]
             df.columns = columnas_deseadas
 
-        # Descartar filas iniciales ANTES de calcular el total, para que el total
-        # coincida exactamente con las filas que quedan en la planilla.
         df = df.iloc[FILAS_A_DESCARTAR:].reset_index(drop=True)
 
         montos_normalizados = {k.strip().upper(): v for k, v in montos.items()}
@@ -246,7 +244,7 @@ btn_cargar.pack(pady=10)
 lbl_archivo = tk.Label(frame_interior, text="Ningún archivo seleccionado", fg="blue")
 lbl_archivo.pack()
 
-# Período a liquidar (por defecto: mes vencido)
+# Período a liquidar
 frame_periodo = tk.LabelFrame(frame_interior, text="Período a liquidar")
 frame_periodo.pack(pady=10)
 
