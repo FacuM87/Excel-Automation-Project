@@ -13,12 +13,16 @@ MESES = [
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
 
-# Filas de datos del Excel de origen que se descartan antes de liquidar
-FILAS_A_DESCARTAR = 2
+COLUMNAS_SALIDA = ["Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
+FILAS_BUSQUEDA_ENCABEZADO = 10
+
+
+class FormatoInvalido(Exception):
+    pass
 
 
 def obtener_directorio_app():
-    """Carpeta del .exe (si está empaquetado) o del script, independiente del directorio de trabajo."""
+    """Carpeta del .exe o del script, independiente del directorio de trabajo."""
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
@@ -32,7 +36,7 @@ def obtener_ruta_guardado():
 
 ruta_guardado = obtener_ruta_guardado()
 archivo_json = obtener_directorio_app() / "expse_montos.json"
-archivo_json_anterior = Path("expse_montos.json") 
+archivo_json_anterior = Path("expse_montos.json")
 
 expse_montos = {"EXPSE 1": "", "EXPSE 2": "", "EXPSE 4": "", "EXPSE 6": "", "EXPSE 7": ""}
 
@@ -126,6 +130,34 @@ def obtener_nombre_archivo_unico(base_path, mes, año):
     return ruta_archivo
 
 
+def leer_planilla_origen(ruta):
+    vista_previa = pd.read_excel(ruta, header=None, nrows=FILAS_BUSQUEDA_ENCABEZADO)
+    for fila_encabezado, fila in vista_previa.iterrows():
+        valores = {str(v).strip() for v in fila if pd.notna(v)}
+        if {"Fecha", "Prestación"} <= valores:
+            break
+    else:
+        raise FormatoInvalido("No se encontró la fila de encabezados (con las columnas Fecha y Prestación).")
+
+    df = pd.read_excel(ruta, header=fila_encabezado)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    faltantes = [c for c in COLUMNAS_SALIDA if c not in df.columns]
+    if faltantes:
+        raise FormatoInvalido("Faltan las columnas: " + ", ".join(faltantes))
+
+    df = df.dropna(subset=["Fecha", "Prestación"], how="all")
+
+    no_cumplidas = 0
+    if "Cumplida" in df.columns:
+        cumplida = df["Cumplida"].fillna("").astype(str).str.strip().str.upper().str.replace("Í", "I")
+        es_cumplida = cumplida == "SI"
+        no_cumplidas = int((~es_cumplida).sum())
+        df = df[es_cumplida]
+
+    return df[COLUMNAS_SALIDA].reset_index(drop=True), no_cumplidas
+
+
 def procesar_excel():
     global ruta_archivo_modificado
 
@@ -147,22 +179,12 @@ def procesar_excel():
     guardar_expse_montos()
 
     try:
-        df = pd.read_excel(ruta_archivo_seleccionado, header=0)
-        columnas_deseadas = ["Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
-
-        if all(col in df.columns for col in columnas_deseadas):
-            df = df[columnas_deseadas]
-        else:
-            df = df.iloc[:, [1, 2, 3, 4, 7]]
-            df.columns = columnas_deseadas
-
-        df = df.iloc[FILAS_A_DESCARTAR:].reset_index(drop=True)
+        df, no_cumplidas = leer_planilla_origen(ruta_archivo_seleccionado)
 
         montos_normalizados = {k.strip().upper(): v for k, v in montos.items()}
         prestaciones = df["Prestación"].fillna("").astype(str).str.strip()
         df["Monto"] = prestaciones.str.upper().map(montos_normalizados)
 
-        # Prestaciones que no corresponden a ningún EXPSE configurado
         mascara_sin_monto = df["Monto"].isna()
         sin_monto = sorted(set(prestaciones[mascara_sin_monto]))
         cantidad_sin_monto = int(mascara_sin_monto.sum())
@@ -174,19 +196,27 @@ def procesar_excel():
         ruta_archivo_modificado = obtener_nombre_archivo_unico(ruta_guardado, mes, año)
         df.to_excel(ruta_archivo_modificado, index=False, header=True)
 
-        mensaje = f"Archivo guardado en: {ruta_archivo_modificado}"
+        advertencias = []
+        if no_cumplidas:
+            advertencias.append(f"Se excluyeron {no_cumplidas} orden(es) no cumplida(s).")
         if sin_monto:
             lista = "\n".join(f"  • {p if p else '(vacío)'}" for p in sin_monto)
-            mensaje += (
-                f"\n\nAtención: {cantidad_sin_monto} fila(s) quedaron con monto 0 porque su prestación "
+            advertencias.append(
+                f"{cantidad_sin_monto} fila(s) quedaron con monto 0 porque su prestación "
                 f"no coincide con ningún EXPSE configurado:\n{lista}"
             )
+
+        mensaje = f"Archivo guardado en: {ruta_archivo_modificado}"
+        if advertencias:
+            mensaje += "\n\nAtención:\n" + "\n\n".join(advertencias)
             messagebox.showwarning("Procesado con advertencias", mensaje)
         else:
             messagebox.showinfo("Éxito", mensaje)
 
         btn_abrir_ubicacion.config(state=tk.NORMAL)
 
+    except FormatoInvalido as e:
+        messagebox.showerror("Formato no reconocido", f"El archivo no tiene el formato esperado.\n{e}")
     except ImportError as e:
         messagebox.showerror("Error", f"Falta una librería para leer este tipo de archivo\n{e}")
     except Exception as e:
@@ -244,7 +274,6 @@ btn_cargar.pack(pady=10)
 lbl_archivo = tk.Label(frame_interior, text="Ningún archivo seleccionado", fg="blue")
 lbl_archivo.pack()
 
-# Período a liquidar
 frame_periodo = tk.LabelFrame(frame_interior, text="Período a liquidar")
 frame_periodo.pack(pady=10)
 
