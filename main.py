@@ -15,6 +15,10 @@ MESES = [
 
 COLUMNAS_SALIDA = ["Fecha", "Profesional", "HC", "Trabajador", "Prestación"]
 FILAS_BUSQUEDA_ENCABEZADO = 10
+PRESTACIONES_POR_DEFECTO = [
+    "EXPSE 1", "EXPSE 2", "EXPSE 4", "EXPSE 6", "EXPSE 7",
+    "ATEPSIQ", "PSICOMEY", "CONS", "CUES DES",
+]
 
 
 class FormatoInvalido(Exception):
@@ -34,20 +38,41 @@ def obtener_ruta_guardado():
     return escritorio if escritorio.exists() else documentos if documentos.exists() else Path.home()
 
 
-ruta_guardado = obtener_ruta_guardado()
-archivo_json = obtener_directorio_app() / "expse_montos.json"
-archivo_json_anterior = Path("expse_montos.json")
+def normalizar_prestacion(nombre):
+    return " ".join(str(nombre).split()).upper()
 
-expse_montos = {"EXPSE 1": "", "EXPSE 2": "", "EXPSE 4": "", "EXPSE 6": "", "EXPSE 7": ""}
 
-for ruta in (archivo_json, archivo_json_anterior):
-    if ruta.exists():
-        try:
-            with open(ruta, "r", encoding="utf-8") as file:
-                expse_montos = json.load(file)
+def leer_json(ruta):
+    try:
+        with open(ruta, "r", encoding="utf-8") as file:
+            datos = json.load(file)
+        return {normalizar_prestacion(k): str(v) for k, v in datos.items()}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+
+
+def cargar_montos():
+    """Lee prestaciones.json; si no existe, migra los montos de expse_montos.json."""
+    if archivo_json.exists():
+        montos = leer_json(archivo_json)
+        if montos is not None:
+            return montos
+
+    montos = {}
+    for ruta in archivos_json_anteriores:
+        if ruta.exists():
+            montos = leer_json(ruta) or {}
             break
-        except (OSError, json.JSONDecodeError):
-            pass
+    for prestacion in PRESTACIONES_POR_DEFECTO:
+        montos.setdefault(prestacion, "")
+    return montos
+
+
+ruta_guardado = obtener_ruta_guardado()
+archivo_json = obtener_directorio_app() / "prestaciones.json"
+archivos_json_anteriores = (obtener_directorio_app() / "expse_montos.json", Path("expse_montos.json"))
+
+montos_prestaciones = cargar_montos()
 
 ruta_archivo_seleccionado = None
 ruta_archivo_modificado = None
@@ -82,26 +107,77 @@ def parsear_monto(texto):
 
 
 def leer_y_validar_montos():
-    """Lee los montos de la interfaz. Devuelve (montos_numericos, errores)."""
+    """Lee los montos de la interfaz. Devuelve (montos_numericos, errores). Los vacíos se omiten."""
     montos = {}
     errores = []
-    for expse, entry in entries.items():
+    for prestacion, entry in entries.items():
+        if not entry.get().strip():
+            continue
         valor = parsear_monto(entry.get())
         if valor is None:
-            errores.append(f"{expse}: \"{entry.get()}\" no es un número válido")
+            errores.append(f"{prestacion}: \"{entry.get()}\" no es un número válido")
         else:
-            montos[expse] = valor
+            montos[prestacion] = valor
     return montos, errores
 
 
-def guardar_expse_montos():
-    for expse, entry in entries.items():
-        expse_montos[expse] = entry.get()
+def sincronizar_montos():
+    for prestacion, entry in entries.items():
+        montos_prestaciones[prestacion] = entry.get()
+
+
+def guardar_montos():
+    sincronizar_montos()
     try:
         with open(archivo_json, "w", encoding="utf-8") as file:
-            json.dump(expse_montos, file, indent=4, ensure_ascii=False)
+            json.dump(montos_prestaciones, file, indent=4, ensure_ascii=False)
     except OSError as e:
         messagebox.showwarning("Aviso", f"No se pudieron guardar los montos en {archivo_json}\n{e}")
+
+
+def dibujar_prestaciones():
+    for widget in frame_lista.winfo_children():
+        widget.destroy()
+    entries.clear()
+    for i, prestacion in enumerate(montos_prestaciones):
+        fila, col = divmod(i, 2)
+        col *= 3
+        tk.Label(frame_lista, text=f"{prestacion}:").grid(row=fila, column=col, sticky="e", padx=(10, 2), pady=2)
+        entry = tk.Entry(frame_lista, width=10)
+        entry.insert(0, montos_prestaciones[prestacion])
+        entry.grid(row=fila, column=col + 1, pady=2)
+        tk.Button(frame_lista, text="✕", width=2, command=lambda p=prestacion: quitar_prestacion(p)).grid(
+            row=fila, column=col + 2, padx=(2, 10), pady=2)
+        entries[prestacion] = entry
+
+
+def agregar_prestacion():
+    nombre = normalizar_prestacion(ent_nueva_nombre.get())
+    monto = ent_nueva_monto.get().strip()
+    if not nombre:
+        messagebox.showerror("Prestación inválida", "Ingresá el nombre de la prestación.")
+        return
+    if nombre in entries:
+        messagebox.showerror("Prestación repetida", f"{nombre} ya está en la lista.")
+        return
+    if monto and parsear_monto(monto) is None:
+        messagebox.showerror("Monto inválido", f"\"{monto}\" no es un número válido.")
+        return
+    sincronizar_montos()
+    montos_prestaciones[nombre] = monto
+    dibujar_prestaciones()
+    guardar_montos()
+    ent_nueva_nombre.delete(0, tk.END)
+    ent_nueva_monto.delete(0, tk.END)
+
+
+def quitar_prestacion(prestacion):
+    if not messagebox.askyesno("Quitar prestación", f"¿Quitar {prestacion} de la lista?"):
+        return
+    sincronizar_montos()
+    del montos_prestaciones[prestacion]
+    dibujar_prestaciones()
+    guardar_montos()
 
 
 def obtener_periodo_seleccionado():
@@ -176,14 +252,13 @@ def procesar_excel():
         messagebox.showerror("Período inválido", str(e))
         return
 
-    guardar_expse_montos()
+    guardar_montos()
 
     try:
         df, no_cumplidas = leer_planilla_origen(ruta_archivo_seleccionado)
 
-        montos_normalizados = {k.strip().upper(): v for k, v in montos.items()}
         prestaciones = df["Prestación"].fillna("").astype(str).str.strip()
-        df["Monto"] = prestaciones.str.upper().map(montos_normalizados)
+        df["Monto"] = prestaciones.map(normalizar_prestacion).map(montos)
 
         mascara_sin_monto = df["Monto"].isna()
         sin_monto = sorted(set(prestaciones[mascara_sin_monto]))
@@ -203,7 +278,7 @@ def procesar_excel():
             lista = "\n".join(f"  • {p if p else '(vacío)'}" for p in sin_monto)
             advertencias.append(
                 f"{cantidad_sin_monto} fila(s) quedaron con monto 0 porque su prestación "
-                f"no coincide con ningún EXPSE configurado:\n{lista}"
+                f"no está configurada o no tiene monto cargado:\n{lista}"
             )
 
         mensaje = f"Archivo guardado en: {ruta_archivo_modificado}"
@@ -240,7 +315,7 @@ def restablecer_mes_vencido():
 # --- Interfaz Gráfica --- #
 root = tk.Tk()
 root.title("Cargar y Modificar Excel")
-root.geometry("500x460")
+root.minsize(500, 0)
 
 if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS
@@ -254,19 +329,11 @@ try:
 except Exception as e:
     print(f"No se pudo cargar el ícono: {e}")
 
-
-root.update_idletasks()
-ancho = root.winfo_width()
-alto = root.winfo_height()
-x = (root.winfo_screenwidth() // 2) - (ancho // 2)
-y = (root.winfo_screenheight() // 2) - (alto // 2)
-root.geometry(f"+{x}+{y}")
-
 frame_contenedor = tk.Frame(root)
 frame_contenedor.pack(expand=True, fill="both")
 
 frame_interior = tk.Frame(frame_contenedor)
-frame_interior.pack(expand=True)
+frame_interior.pack(expand=True, padx=20, pady=10)
 
 btn_cargar = tk.Button(frame_interior, text="Seleccionar Planilla", width=25, command=seleccionar_archivo)
 btn_cargar.pack(pady=10)
@@ -289,21 +356,35 @@ btn_mes_vencido.pack(side=tk.LEFT, padx=5, pady=5)
 
 restablecer_mes_vencido()
 
-entries = {}
+frame_montos = tk.LabelFrame(frame_interior, text="Montos por prestación")
+frame_montos.pack(pady=10, fill="x")
 
-for expse in expse_montos:
-    frame = tk.Frame(frame_interior)
-    frame.pack(pady=2)
-    tk.Label(frame, text=f"{expse}:").pack(side=tk.LEFT, padx=5)
-    entry = tk.Entry(frame, width=10)
-    entry.insert(0, expse_montos[expse])
-    entry.pack(side=tk.LEFT)
-    entries[expse] = entry
+entries = {}
+frame_lista = tk.Frame(frame_montos)
+frame_lista.pack(pady=5)
+dibujar_prestaciones()
+
+frame_nueva = tk.Frame(frame_montos)
+frame_nueva.pack(pady=(5, 8))
+tk.Label(frame_nueva, text="Nueva:").pack(side=tk.LEFT, padx=5)
+ent_nueva_nombre = tk.Entry(frame_nueva, width=14)
+ent_nueva_nombre.pack(side=tk.LEFT, padx=2)
+tk.Label(frame_nueva, text="Monto:").pack(side=tk.LEFT, padx=5)
+ent_nueva_monto = tk.Entry(frame_nueva, width=10)
+ent_nueva_monto.pack(side=tk.LEFT, padx=2)
+tk.Button(frame_nueva, text="Agregar", command=agregar_prestacion).pack(side=tk.LEFT, padx=5)
 
 btn_procesar = tk.Button(frame_interior, text="Procesar Planilla", width=25, command=procesar_excel)
 btn_procesar.pack(pady=10)
 
 btn_abrir_ubicacion = tk.Button(frame_interior, text="Abrir Ubicación de Planilla Modificada", width=30, command=abrir_ubicacion, state=tk.DISABLED)
 btn_abrir_ubicacion.pack(pady=10)
+
+root.update_idletasks()
+ancho = root.winfo_reqwidth()
+alto = root.winfo_reqheight()
+x = (root.winfo_screenwidth() // 2) - (ancho // 2)
+y = (root.winfo_screenheight() // 2) - (alto // 2)
+root.geometry(f"+{x}+{max(y, 0)}")
 
 root.mainloop()
