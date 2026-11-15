@@ -92,6 +92,14 @@ def test_exportar_mensual(con, registrar, tmp_path):
                      ("TOTAL", 2, 300)]
     assert hoja["C8"].number_format == reportes.FORMATO_MONTO
     assert hoja["A8"].font.bold
+    assert len(hoja._charts) == 1
+
+
+def test_exportar_mensual_sin_datos_no_agrega_grafico(con, registrar, tmp_path):
+    registrar(3, 2026, ["PSICOMEY"])
+    ruta = tmp_path / "mensual.xlsx"
+    reportes.exportar_mensual(reportes.reporte_mensual(con, 3, 2026), ruta)
+    assert load_workbook(ruta).active._charts == []
 
 
 def test_exportar_anual(con, registrar, tmp_path):
@@ -109,3 +117,4 @@ def test_exportar_anual(con, registrar, tmp_path):
     assert filas[inicio + 1:inicio + 5] == [("Prestación", "Cantidad", "Total"), ("EXPSE 1", 1, 100),
                                             ("EXPSE 2", 1, 200), ("TOTAL", 2, 300)]
     assert isinstance(hoja.cell(5 + 4, 3).value, (int, float))
+    assert len(hoja._charts) == 2

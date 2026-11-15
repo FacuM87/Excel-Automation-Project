@@ -8,6 +8,7 @@ import ttkbootstrap as tb
 
 from .. import base_datos, reportes
 from ..procesamiento import MESES, formatear_monto
+from .graficos import GraficoBarras, GraficoBarrasHorizontales
 from .utiles import crear_tabla
 
 COLUMNAS_PRESTACION = (("prestacion", "Prestación", 160, "w"), ("cantidad", "Cantidad", 80, "e"),
@@ -34,6 +35,13 @@ class PestanaReportes:
         for valor, texto in (("mensual", "Mensual"), ("anual", "Anual")):
             tb.Radiobutton(barra, text=texto, value=valor, variable=self.var_tipo, bootstyle="info-outline-toolbutton",
                            cursor="hand2", width=9, command=self.actualizar).pack(side=tk.LEFT)
+        self.var_vista = tk.StringVar(value="tabla")
+        marco_vista = tb.Frame(barra)
+        marco_vista.pack(side=tk.LEFT, padx=(15, 0))
+        for valor, texto in (("tabla", "Tabla"), ("grafico", "Gráfico")):
+            tb.Radiobutton(marco_vista, text=texto, value=valor, variable=self.var_vista,
+                           bootstyle="info-outline-toolbutton", cursor="hand2", width=9,
+                           command=self.mostrar).pack(side=tk.LEFT)
         self.cmb_periodo = tb.Combobox(barra, state="readonly", width=16)
         self.cmb_periodo.pack(side=tk.LEFT, padx=15)
         self.cmb_periodo.bind("<<ComboboxSelected>>", lambda _e: self.mostrar())
@@ -65,6 +73,24 @@ class PestanaReportes:
         for tabla in (self.tabla_mensual, self.tabla_meses, self.tabla_anual):
             tabla.tag_configure("total", font=self.fuente_total)
 
+        self.grafico_mensual_marco = tb.Labelframe(self.contenido, text="Total por prestación", padding=5)
+        self.grafico_mensual = GraficoBarrasHorizontales(self.grafico_mensual_marco)
+        self.grafico_mensual.pack(fill="both", expand=True)
+
+        self.grafico_anual_divisor = tb.Panedwindow(self.contenido, orient=tk.HORIZONTAL)
+        izquierda = tb.Labelframe(self.grafico_anual_divisor, text="Total por mes", padding=5)
+        self.grafico_anual_divisor.add(izquierda, weight=3)
+        self.grafico_meses = GraficoBarras(izquierda)
+        self.grafico_meses.pack(fill="both", expand=True)
+        derecha = tb.Labelframe(self.grafico_anual_divisor, text="Por prestación", padding=5)
+        self.grafico_anual_divisor.add(derecha, weight=2)
+        self.grafico_anual = GraficoBarrasHorizontales(derecha)
+        self.grafico_anual.pack(fill="both", expand=True)
+
+        self.vistas = {("mensual", "tabla"): self.vista_mensual, ("anual", "tabla"): self.vista_anual,
+                       ("mensual", "grafico"): self.grafico_mensual_marco,
+                       ("anual", "grafico"): self.grafico_anual_divisor}
+
         self.actualizar()
 
     def _abrir_base(self):
@@ -92,8 +118,11 @@ class PestanaReportes:
 
     def mostrar(self, error=False):
         mensual = self.var_tipo.get() == "mensual"
-        (self.vista_anual if mensual else self.vista_mensual).pack_forget()
-        (self.vista_mensual if mensual else self.vista_anual).pack(fill="both", expand=True)
+        elegida = self.vistas[(self.var_tipo.get(), self.var_vista.get())]
+        for vista in self.vistas.values():
+            if vista is not elegida:
+                vista.pack_forget()
+        elegida.pack(fill="both", expand=True)
         for tabla in (self.tabla_mensual, self.tabla_meses, self.tabla_anual):
             tabla.delete(*tabla.get_children())
 
@@ -104,6 +133,8 @@ class PestanaReportes:
                 self.reporte = reportes.reporte_mensual(con, *clave) if mensual else reportes.reporte_anual(con, clave)
         self.btn_exportar.config(state=tk.NORMAL if self.reporte else tk.DISABLED)
         if not self.reporte:
+            for grafico in (self.grafico_mensual, self.grafico_meses, self.grafico_anual):
+                grafico.mostrar([])
             if not error:
                 self.lbl_estado.config(text="Todavía no hay liquidaciones registradas.")
             return
@@ -113,12 +144,15 @@ class PestanaReportes:
         self.lbl_estado.config(text="   ".join(t for t in (resumen, reportes.nota_opcional(r)) if t))
         if mensual:
             self._llenar_prestaciones(self.tabla_mensual, r)
+            self.grafico_mensual.mostrar((p or "(vacío)", t, c) for p, c, t in r.por_prestacion)
             return
         for mes, cantidad, total in r.por_mes:
             self.tabla_meses.insert("", tk.END, values=(MESES[mes - 1], "—" if cantidad is None else cantidad,
                                                         _monto(total)))
         self.tabla_meses.insert("", tk.END, values=("TOTAL", r.cantidad, _monto(r.total)), tags=("total",))
         self._llenar_prestaciones(self.tabla_anual, r)
+        self.grafico_meses.mostrar((MESES[mes - 1][:3], total) for mes, _c, total in r.por_mes)
+        self.grafico_anual.mostrar((p or "(vacío)", t, c) for p, c, t in r.por_prestacion)
 
     def _llenar_prestaciones(self, tabla, reporte):
         for prestacion, cantidad, total in reporte.por_prestacion:

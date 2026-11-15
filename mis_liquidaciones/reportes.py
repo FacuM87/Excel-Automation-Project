@@ -2,11 +2,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.data_source import NumFmt
+from openpyxl.chart.label import DataLabelList
+from openpyxl.descriptors import Typed
 from openpyxl.styles import Border, Font, PatternFill, Side
 
 from .procesamiento import MESES, PRESTACION_OPCIONAL
 
 FORMATO_MONTO = '"$" #,##0.00'
+FORMATO_ABREVIADO = '"$" #,##0, "mil"'
+COLOR_BARRAS = "3498DB"
 
 
 @dataclass
@@ -82,16 +88,26 @@ def nota_opcional(reporte):
 
 # --- Exportación a Excel --- #
 
+
+class _Etiquetas(DataLabelList):
+    """openpyxl escribe el formato de las etiquetas sin sourceLinked=0 y Excel lo ignora."""
+    numFmt = Typed(expected_type=NumFmt, allow_none=True)
+    __attrs__ = DataLabelList.__attrs__
+    __nested__ = tuple(n for n in DataLabelList.__nested__ if n != "numFmt")
+    __elements__ = DataLabelList.__elements__
+
+
 _NEGRITA = Font(bold=True)
 _RELLENO_ENCABEZADO = PatternFill("solid", fgColor="DCE6F1")
 _LINEA = Side(style="thin", color="808080")
 
 
 def _escribir_tabla(hoja, fila, subtitulo, encabezados, filas, fila_total):
-    """Escribe subtítulo, encabezados, filas y TOTAL desde la fila indicada. Devuelve la siguiente fila libre."""
+    """Escribe subtítulo, encabezados, filas y TOTAL desde la fila indicada. Devuelve (fila de encabezados, siguiente libre)."""
     if subtitulo:
         hoja.cell(fila, 1, subtitulo).font = Font(bold=True, size=12)
         fila += 1
+    encabezado = fila
     for col, texto in enumerate(encabezados, 1):
         celda = hoja.cell(fila, col, texto)
         celda.font = _NEGRITA
@@ -107,7 +123,7 @@ def _escribir_tabla(hoja, fila, subtitulo, encabezados, filas, fila_total):
         celda = hoja.cell(fila, col)
         celda.font = _NEGRITA
         celda.border = Border(top=_LINEA)
-    return fila + 2
+    return encabezado, fila + 2
 
 
 def _nuevo_libro(titulo, reporte):
@@ -123,18 +139,54 @@ def _nuevo_libro(titulo, reporte):
     return libro, hoja
 
 
+def _grafico(hoja, encabezado, cantidad_filas, titulo, horizontal, alto):
+    """Gráfico de barras nativo de Excel con los totales (columna C) de la tabla, ubicado en la columna E."""
+    if not cantidad_filas:
+        return
+    grafico = BarChart()
+    grafico.type = "bar" if horizontal else "col"
+    grafico.title = titulo
+    grafico.title.overlay = False
+    grafico.legend = None
+    grafico.height, grafico.width = alto, 16 if horizontal else 22
+    grafico.gapWidth = 60
+    grafico.add_data(Reference(hoja, min_col=3, min_row=encabezado, max_row=encabezado + cantidad_filas),
+                     titles_from_data=True)
+    grafico.set_categories(Reference(hoja, min_col=1, min_row=encabezado + 1, max_row=encabezado + cantidad_filas))
+    serie = grafico.series[0]
+    serie.graphicalProperties.solidFill = COLOR_BARRAS
+    serie.graphicalProperties.line.noFill = True
+    formato = '"$" #,##0' if horizontal else FORMATO_ABREVIADO
+    grafico.dataLabels = _Etiquetas(numFmt=NumFmt(formatCode=formato, sourceLinked=False), showVal=True,
+                                    showSerName=False, showCatName=False, showLegendKey=False,
+                                    showPercent=False, showLeaderLines=False)
+    grafico.y_axis.majorGridlines = None
+    grafico.x_axis.delete = False
+    grafico.y_axis.delete = True
+    if horizontal:
+        grafico.x_axis.scaling.orientation = "maxMin"
+    hoja.add_chart(grafico, f"E{encabezado}")
+
+
 def exportar_mensual(reporte, ruta):
     libro, hoja = _nuevo_libro(f"Reporte mensual — {reporte.nombre}", reporte)
-    _escribir_tabla(hoja, 5, None, ("Prestación", "Cantidad", "Total"), reporte.por_prestacion,
-                    ("TOTAL", reporte.cantidad, reporte.total))
+    encabezado, _ = _escribir_tabla(hoja, 5, None, ("Prestación", "Cantidad", "Total"), reporte.por_prestacion,
+                                    ("TOTAL", reporte.cantidad, reporte.total))
+    filas = len(reporte.por_prestacion)
+    _grafico(hoja, encabezado, filas, f"Total por prestación — {reporte.nombre}", True, max(6, 1 + filas * 0.9))
     libro.save(ruta)
 
 
 def exportar_anual(reporte, ruta):
     libro, hoja = _nuevo_libro(f"Reporte anual {reporte.año}", reporte)
     filas_mes = [(MESES[mes - 1], cantidad, total) for mes, cantidad, total in reporte.por_mes]
-    fila = _escribir_tabla(hoja, 5, "Por mes", ("Mes", "Órdenes", "Total"), filas_mes,
-                           ("TOTAL", reporte.cantidad, reporte.total))
-    _escribir_tabla(hoja, fila, "Por prestación", ("Prestación", "Cantidad", "Total"), reporte.por_prestacion,
-                    ("TOTAL", reporte.cantidad, reporte.total))
+    encabezado_mes, fila = _escribir_tabla(hoja, 5, "Por mes", ("Mes", "Órdenes", "Total"), filas_mes,
+                                           ("TOTAL", reporte.cantidad, reporte.total))
+    encabezado_prestacion, _ = _escribir_tabla(
+        hoja, fila, "Por prestación", ("Prestación", "Cantidad", "Total"), reporte.por_prestacion,
+        ("TOTAL", reporte.cantidad, reporte.total))
+    _grafico(hoja, encabezado_mes, 12, f"Total por mes — {reporte.año}", False, 7)
+    filas = len(reporte.por_prestacion)
+    _grafico(hoja, encabezado_prestacion, filas, f"Total por prestación — {reporte.año}", True,
+             max(6, 1 + filas * 0.9))
     libro.save(ruta)
